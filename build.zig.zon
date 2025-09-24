@@ -1,0 +1,11 @@
+.{
+    .name = .minish,
+    .version = "0.1.0-alpha.1",
+    .fingerprint = 0x4a0e1bdb4d520b49, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{ .chilli = .{
+        .url = "https://github.com/habedi/chilli/archive/v0.1.0.tar.gz",
+        .hash = "chilli-0.1.0-c19PrmQ0AQC0PGmSNJQ98ASPdpBwc8bqK-aBp4WhKL_7",
+    } },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "LICENSE", "README.md" },
+}
