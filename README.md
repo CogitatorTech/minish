@@ -6,11 +6,11 @@
 
 <h2>Minish</h2>
 
-[![Tests](https://img.shields.io/github/actions/workflow/status/habedi/minish/tests.yml?label=tests&style=flat&labelColor=282c34&logo=github)](https://github.com/habedi/minish/actions/workflows/tests.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/habedi/minish/blob/main/LICENSE)
-[![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/habedi/minish/tree/main/examples)
+[![Tests](https://img.shields.io/github/actions/workflow/status/CogitatorTech/minish/tests.yml?label=tests&style=flat&labelColor=282c34&logo=github)](https://github.com/CogitatorTech/minish/actions/workflows/tests.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/CogitatorTech/minish/blob/main/LICENSE)
+[![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/CogitatorTech/minish/tree/main/examples)
 [![Zig Version](https://img.shields.io/badge/Zig-0.15.1-orange?logo=zig&labelColor=282c34)](https://ziglang.org/download/)
-[![Release](https://img.shields.io/github/release/habedi/minish.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/habedi/minish/releases/latest)
+[![Release](https://img.shields.io/github/release/CogitatorTech/minish.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/CogitatorTech/minish/releases/latest)
 
 A property-based testing framework for Zig.
 
@@ -37,7 +37,7 @@ This guide shows how to add Minish to your project and write a simple property t
 Run this command in your project's root directory.
 
 ```sh
-zig fetch --save=minish "https://github.com/habedi/minish/archive/main.tar.gz"
+zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/main.tar.gz"
 ```
 
 This command adds Minish to your `build.zig.zon` file.

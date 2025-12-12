@@ -9,6 +9,8 @@ pub const GenError = error{
     OutOfMemory,
 };
 
+/// TestCase manages the state for a single property test run.
+/// It tracks random choices made during generation to enable shrinking.
 pub const TestCase = struct {
     allocator: Allocator,
     prng: DefaultPrng,
@@ -33,6 +35,8 @@ pub const TestCase = struct {
         self.choices.deinit(self.allocator);
     }
 
+    /// Make a choice uniformly from 0 to n (inclusive).
+    /// This is the core primitive for all randomness in property tests.
     pub fn choice(self: *TestCase, n: u64) GenError!u64 {
         if (self.choices.items.len >= self.max_size) {
             return error.Overrun;
@@ -54,5 +58,35 @@ pub const TestCase = struct {
             return error.InvalidChoice;
         }
         return result;
+    }
+
+    /// Make a choice in the given range [min, max] (inclusive).
+    pub fn choiceInRange(self: *TestCase, comptime T: type, min: T, max: T) GenError!T {
+        if (min > max) return error.InvalidChoice;
+        const range = max - min;
+        const choice_val = try self.choice(@intCast(range));
+        return @as(T, @intCast(choice_val)) + min;
+    }
+
+    /// Make a weighted choice from a list of weights.
+    /// Returns the index of the chosen item.
+    pub fn weightedChoice(self: *TestCase, weights: []const u64) GenError!usize {
+        if (weights.len == 0) return error.InvalidChoice;
+
+        var total: u64 = 0;
+        for (weights) |w| {
+            total += w;
+        }
+        if (total == 0) return error.InvalidChoice;
+
+        const chosen = try self.choice(total - 1);
+        var sum: u64 = 0;
+        for (weights, 0..) |w, i| {
+            sum += w;
+            if (chosen < sum) {
+                return i;
+            }
+        }
+        return weights.len - 1;
     }
 };

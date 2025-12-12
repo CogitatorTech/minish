@@ -31,6 +31,9 @@ pub fn check(
             std.debug.print("Generator failed: {s}\n", .{@errorName(err)});
             return err;
         };
+        defer if (generator.freeFn) |freeFn| {
+            freeFn(allocator, value);
+        };
 
         test_fn(value) catch |err| {
             std.debug.print(
@@ -46,11 +49,13 @@ pub fn check(
             if (generator.shrinkFn) |shrinker| {
                 std.debug.print("Shrinking...\n", .{});
                 var minimal_value = value;
-                var it = shrinker(minimal_value);
+                var it = shrinker(allocator, minimal_value);
+                defer it.deinit();
                 while (it.next()) |next_val| {
                     if (test_fn(next_val)) |_| {} else |_| {
                         minimal_value = next_val;
-                        it = shrinker(minimal_value);
+                        it.deinit();
+                        it = shrinker(allocator, minimal_value);
                     }
                 }
                 std.debug.print("Minimal failing input: {any}\n", .{minimal_value});
