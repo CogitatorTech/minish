@@ -1,11 +1,21 @@
+//! Core types for property-based testing.
+//!
+//! This module provides the fundamental building blocks:
+//! - `GenError`: Errors that can occur during value generation
+//! - `TestCase`: Manages random choices and enables shrinking
+
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 const DefaultPrng = std.Random.DefaultPrng;
 
+/// Errors that can occur during value generation.
 pub const GenError = error{
+    /// Generation exceeded the maximum allowed choices.
     Overrun,
+    /// An invalid choice was requested (e.g., empty range).
     InvalidChoice,
+    /// Memory allocation failed.
     OutOfMemory,
 };
 

@@ -1,33 +1,33 @@
-## Examples
+### Minish Examples
 
-This directory contains various examples of using Element 0, including both running Element 0 code and using its
-interpreter from Zig via the FFI.
+#### List of Examples
 
-### Element 0 Examples
+| # | File                                                           | Description                       |
+|---|----------------------------------------------------------------|-----------------------------------|
+| 1 | [e1_simple_example.zig](e1_simple_example.zig)                 | Basic tuple generator             |
+| 2 | [e2_string_example.zig](e2_string_example.zig)                 | String property testing           |
+| 3 | [e3_list_example.zig](e3_list_example.zig)                     | List property testing (sorting)   |
+| 4 | [e4_advanced_generators.zig](e4_advanced_generators.zig)       | Multiple generator types          |
+| 5 | [e5_struct_and_combinators.zig](e5_struct_and_combinators.zig) | Struct generation and combinators |
+| 6 | [e6_shrinking_demo.zig](e6_shrinking_demo.zig)                 | Shrinking demonstration           |
+| 7 | [e7_hashmap_example.zig](e7_hashmap_example.zig)               | HashMap property testing          |
 
-The [elz](elz) directory contains examples of Element 0 scripts (`.elz` files).
-You can run them using the `elz` interpreter.
+#### Running Examples
 
-For example, to run the factorial example ([e4-factorial.elz](elz/e4-factorial.elz)):
+To execute an example, run the following command from the root of the repository:
 
 ```sh
-# Build the Elz binary, if you haven't already
-zig build
-
-./zig-out/bin/elz-repl -f examples/elz/e4-factorial.elz
+zig build run-{FILE_NAME_WITHOUT_EXTENSION}
 ```
 
-### Zig Examples
-
-The [zig](zig) directory contains examples of how to use the FFI to call Zig functions from Element 0 code.
-
-For example, to run the FFI power example ([e1_ffi_pow.zig](zig/e1_ffi_pow.zig)):
+For example:
 
 ```sh
-# Build the Elz binary, if you haven't already
-zig build
+zig build run-e1_simple_example
+```
 
-./zig-out/bin/e1_ffi_pow
-# Or
-zig build run-e1_ffi_pow
+To run all examples:
+
+```sh
+zig build run-all
 ```

@@ -85,7 +85,7 @@ docs: ## Generate API documentation
 	@"$(ZIG)" build docs
 
 serve-docs: docs ## Serve documentation locally
-	@echo "Serving docs at http://localhost:8000"
+	@echo "Serving project documentation locally..."
 	@cd docs/api && python3 -m http.server 8000
 
 install-deps: ## Install Python development dependencies

@@ -1,9 +1,33 @@
+//! Built-in generators for property-based testing.
+//!
+//! Generators produce random values of specific types. They are composable
+//! and support automatic shrinking to find minimal failing inputs.
+//!
+//! ## Basic Usage
+//!
+//! ```zig
+//! const gen = @import("minish").gen;
+//!
+//! // Integer generators
+//! const int_gen = gen.int(i32);
+//! const range_gen = gen.intRange(i32, 0, 100);
+//!
+//! // Collection generators
+//! const list_gen = gen.list(i32, gen.int(i32), 0, 10);
+//! const string_gen = gen.string(.{ .min_len = 1, .max_len = 20 });
+//! ```
+
 const std = @import("std");
 const core = @import("core.zig");
 const shrink_mod = @import("shrink.zig");
 
 const TestCase = core.TestCase;
 
+/// A generator produces values of type T from random choices.
+/// Each generator has:
+/// - `generateFn`: Creates a value from a TestCase
+/// - `shrinkFn`: Optional function to produce smaller values for shrinking
+/// - `freeFn`: Optional function to free allocated memory
 pub fn Generator(comptime T: type) type {
     return struct {
         generateFn: *const fn (tc: *TestCase) core.GenError!T,
@@ -86,6 +110,19 @@ pub fn float(comptime T: type) Generator(T) {
     return .{ .generateFn = generate_float(T), .shrinkFn = shrink_mod.floatShrinker(T), .freeFn = null };
 }
 
+/// Generate floating point numbers in a specific range [min, max].
+pub fn floatRange(comptime T: type, comptime min: T, comptime max: T) Generator(T) {
+    const RangeGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!T {
+            // Generate a value in [0, 1] and scale to range
+            const mantissa = try tc.choice(std.math.maxInt(u32));
+            const normalized: T = @as(T, @floatFromInt(mantissa)) / @as(T, @floatFromInt(std.math.maxInt(u32)));
+            return min + normalized * (max - min);
+        }
+    };
+    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = shrink_mod.floatShrinker(T), .freeFn = null };
+}
+
 // ============================================================================
 // Boolean Generator
 // ============================================================================
@@ -96,6 +133,140 @@ fn generate_bool(tc: *TestCase) core.GenError!bool {
 
 pub fn boolean() Generator(bool) {
     return .{ .generateFn = generate_bool, .shrinkFn = null, .freeFn = null };
+}
+
+// ============================================================================
+// Character Generator
+// ============================================================================
+
+/// Generate a single ASCII character (printable range 32-126).
+pub fn char() Generator(u8) {
+    const CharGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!u8 {
+            const val = try tc.choice(94); // 126 - 32 = 94 characters
+            return @intCast(32 + val); // Start from space (32)
+        }
+    };
+    return .{ .generateFn = CharGenerator.generate, .shrinkFn = shrink_mod.intShrinker(u8), .freeFn = null };
+}
+
+/// Generate a single character from a specific character set.
+pub fn charFrom(comptime charset: []const u8) Generator(u8) {
+    const CharFromGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!u8 {
+            const idx = try tc.choice(charset.len - 1);
+            return charset[idx];
+        }
+    };
+    return .{ .generateFn = CharFromGenerator.generate, .shrinkFn = null, .freeFn = null };
+}
+
+// ============================================================================
+// Enum Generator
+// ============================================================================
+
+/// Generate a random value from any enum type.
+pub fn enumValue(comptime E: type) Generator(E) {
+    const EnumGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!E {
+            const enum_info = @typeInfo(E);
+            if (enum_info != .@"enum") {
+                @compileError("enumValue() requires an enum type");
+            }
+            const fields = enum_info.@"enum".fields;
+            if (fields.len == 0) {
+                return error.InvalidChoice;
+            }
+            const idx = try tc.choice(fields.len - 1);
+            // Return the enum value at index
+            return @enumFromInt(fields[idx].value);
+        }
+    };
+    return .{ .generateFn = EnumGenerator.generate, .shrinkFn = null, .freeFn = null };
+}
+
+// ============================================================================
+// UUID Generator
+// ============================================================================
+
+/// Generate a random UUID v4 as a 36-character string.
+/// Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+pub fn uuid() Generator([36]u8) {
+    const hex_chars = "0123456789abcdef";
+    const UuidGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError![36]u8 {
+            var result: [36]u8 = undefined;
+            var pos: usize = 0;
+
+            // Generate 8-4-4-4-12 pattern
+            const sections = [_]usize{ 8, 4, 4, 4, 12 };
+            for (sections) |section_len| {
+                if (pos > 0) {
+                    result[pos] = '-';
+                    pos += 1;
+                }
+                for (0..section_len) |i| {
+                    // UUID v4 specific: position 12 is always '4', position 16 is 8/9/a/b
+                    if (pos == 14) {
+                        result[pos] = '4';
+                    } else if (pos == 19) {
+                        const variant = try tc.choice(3); // 0-3 maps to 8,9,a,b
+                        result[pos] = hex_chars[8 + variant];
+                    } else {
+                        const hex_val = try tc.choice(15);
+                        result[pos] = hex_chars[hex_val];
+                    }
+                    pos += 1;
+                    _ = i;
+                }
+            }
+
+            return result;
+        }
+    };
+    return .{ .generateFn = UuidGenerator.generate, .shrinkFn = null, .freeFn = null };
+}
+
+// ============================================================================
+// Timestamp Generator
+// ============================================================================
+
+/// Generate Unix timestamps (seconds since epoch).
+/// Default range: 0 to 2^31-1 (valid until year 2038).
+pub fn timestamp() Generator(i64) {
+    return timestampRange(0, 2147483647);
+}
+
+/// Generate Unix timestamps in a specific range.
+pub fn timestampRange(comptime min: i64, comptime max: i64) Generator(i64) {
+    const TimestampGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!i64 {
+            const range: u64 = @intCast(max - min);
+            const offset = try tc.choice(range);
+            return min + @as(i64, @intCast(offset));
+        }
+    };
+    return .{ .generateFn = TimestampGenerator.generate, .shrinkFn = shrink_mod.intShrinker(i64), .freeFn = null };
+}
+
+// ============================================================================
+// NonEmpty Wrapper
+// ============================================================================
+
+/// Wrapper that generates non-empty lists (min_len >= 1).
+pub fn nonEmptyList(comptime T: type, comptime element_gen: Generator(T), comptime max_len: usize) Generator([]const T) {
+    return list(T, element_gen, 1, max_len);
+}
+
+/// Wrapper that generates non-empty strings (min_len >= 1).
+pub fn nonEmptyString(comptime config: StringConfig) Generator([]const u8) {
+    const adjusted_config = StringConfig{
+        .min_len = if (config.min_len == 0) 1 else config.min_len,
+        .max_len = config.max_len,
+        .charset = config.charset,
+        .custom_chars = config.custom_chars,
+    };
+    return string(adjusted_config);
 }
 
 // ============================================================================
@@ -205,12 +376,13 @@ pub fn hashMap(
             return map;
         }
 
-        fn free(allocator: std.mem.Allocator, value: std.AutoHashMap(K, V)) void {
-            // HashMap is passed by value and contains its own allocator
-            // The test property function is responsible for calling deinit()
-            // We don't call deinit here to avoid double-free
-            _ = allocator;
-            _ = value;
+        fn free(_: std.mem.Allocator, _: std.AutoHashMap(K, V)) void {
+            // NOTE: HashMap is intentionally NOT freed here.
+            // HashMap contains its own allocator reference and is passed by value.
+            // The test function is responsible for calling deinit() because:
+            // 1. The test function mutates the map and needs control over its lifetime
+            // 2. Multiple HashMap generators may share the same test function
+            // Calling deinit here would cause double-free if the test also calls deinit.
         }
     };
     return .{ .generateFn = HashMapGenerator.generate, .shrinkFn = null, .freeFn = HashMapGenerator.free };
@@ -299,7 +471,7 @@ fn generate_tuple(tc: *TestCase) core.GenError!struct { i32, i32 } {
 }
 
 pub fn tuple() Generator(struct { i32, i32 }) {
-    return .{ .generateFn = generate_tuple, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = generate_tuple, .shrinkFn = shrink_mod.tuple2IntShrinker(i32, i32), .freeFn = null };
 }
 
 // ============================================================================

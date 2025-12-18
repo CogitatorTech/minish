@@ -1,3 +1,11 @@
+//! Generator combinators for composing and transforming generators.
+//!
+//! Combinators allow you to build complex generators from simpler ones:
+//! - `map`: Transform generated values
+//! - `flatMap`: Chain generators together
+//! - `filter`: Filter generated values by predicate
+//! - `frequency`: Weighted random choice between generators
+
 const std = @import("std");
 const core = @import("core.zig");
 const gen = @import("gen.zig");

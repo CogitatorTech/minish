@@ -21,6 +21,17 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     b.step("test", "Run unit tests").dependOn(&run_tests.step);
 
+    // API Documentation
+    const docs_step = b.step("docs", "Generate API documentation");
+    const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
+        b.graph.zig_exe,
+        "build-lib",
+        "src/lib.zig",
+        "-femit-docs=docs/api",
+        "-fno-emit-bin",
+    });
+    docs_step.dependOn(&gen_docs_cmd.step);
+
     // Create the aggregate "run-all" step.
     const run_all_step = b.step("run-all", "Run all examples");
 
