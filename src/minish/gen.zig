@@ -30,11 +30,12 @@ fn generate_int(comptime T: type) fn (tc: *TestCase) core.GenError!T {
                 const val = try tc.choice(max_val);
                 return @intCast(val);
             } else {
-                // For signed integers, generate magnitude and sign separately
-                const max_val = std.math.maxInt(T);
-                const val = try tc.choice(@intCast(max_val));
-                const sign = if (try tc.choice(1) == 0) @as(i64, -1) else @as(i64, 1);
-                return @intCast(@as(i64, @intCast(val)) * sign);
+                // For signed integers, generate across unsigned range and bitcast
+                // This correctly covers the full range including minInt
+                const UnsignedT = @Type(.{ .int = .{ .bits = IntType.bits, .signedness = .unsigned } });
+                const max_unsigned = std.math.maxInt(UnsignedT);
+                const val = try tc.choice(max_unsigned);
+                return @bitCast(@as(UnsignedT, @intCast(val)));
             }
         }
     }.generate;
@@ -42,7 +43,7 @@ fn generate_int(comptime T: type) fn (tc: *TestCase) core.GenError!T {
 
 /// Generate random integers of any integer type.
 pub fn int(comptime T: type) Generator(T) {
-    return .{ .generateFn = generate_int(T), .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = generate_int(T), .shrinkFn = shrink_mod.intShrinker(T), .freeFn = null };
 }
 
 /// Generate integers in a specific range [min, max] (inclusive).
@@ -52,7 +53,7 @@ pub fn intRange(comptime T: type, comptime min: T, comptime max: T) Generator(T)
             return tc.choiceInRange(T, min, max);
         }
     };
-    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = shrink_mod.intShrinker(T), .freeFn = null };
 }
 
 // ============================================================================
@@ -82,7 +83,7 @@ fn generate_float(comptime T: type) fn (tc: *TestCase) core.GenError!T {
 
 /// Generate random floating point numbers.
 pub fn float(comptime T: type) Generator(T) {
-    return .{ .generateFn = generate_float(T), .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = generate_float(T), .shrinkFn = shrink_mod.floatShrinker(T), .freeFn = null };
 }
 
 // ============================================================================
@@ -149,7 +150,7 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
             allocator.free(value);
         }
     };
-    return .{ .generateFn = StringGenerator.generate, .shrinkFn = null, .freeFn = StringGenerator.free };
+    return .{ .generateFn = StringGenerator.generate, .shrinkFn = shrink_mod.stringShrinker(), .freeFn = StringGenerator.free };
 }
 
 // ============================================================================
@@ -172,7 +173,47 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
             allocator.free(value);
         }
     };
-    return .{ .generateFn = ListGenerator.generate, .shrinkFn = null, .freeFn = ListGenerator.free };
+    return .{ .generateFn = ListGenerator.generate, .shrinkFn = shrink_mod.listShrinker(T), .freeFn = ListGenerator.free };
+}
+
+// ============================================================================
+// HashMap Generator
+// ============================================================================
+
+pub fn hashMap(
+    comptime K: type,
+    comptime V: type,
+    comptime key_gen: Generator(K),
+    comptime value_gen: Generator(V),
+    comptime min_entries: usize,
+    comptime max_entries: usize,
+) Generator(std.AutoHashMap(K, V)) {
+    const HashMapGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!std.AutoHashMap(K, V) {
+            const num_entries = min_entries + try tc.choice(max_entries - min_entries);
+
+            var map = std.AutoHashMap(K, V).init(tc.allocator);
+            errdefer map.deinit();
+
+            var i: usize = 0;
+            while (i < num_entries) : (i += 1) {
+                const key = try key_gen.generateFn(tc);
+                const value = try value_gen.generateFn(tc);
+                try map.put(key, value);
+            }
+
+            return map;
+        }
+
+        fn free(allocator: std.mem.Allocator, value: std.AutoHashMap(K, V)) void {
+            // HashMap is passed by value and contains its own allocator
+            // The test property function is responsible for calling deinit()
+            // We don't call deinit here to avoid double-free
+            _ = allocator;
+            _ = value;
+        }
+    };
+    return .{ .generateFn = HashMapGenerator.generate, .shrinkFn = null, .freeFn = HashMapGenerator.free };
 }
 
 pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Generator(T)) Generator([size]T) {

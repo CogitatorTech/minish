@@ -12,8 +12,10 @@ pub const Options = @import("minish/runner.zig").Options;
 pub const run = check;
 
 test "Public API Sanity Check" {
-    try std.testing.expect(@TypeOf(gen) == type);
-    try std.testing.expect(@TypeOf(combinators) == type);
+    // Verify modules are accessible and are struct types (namespaces)
+    // gen and combinators are types (struct types), so use @typeInfo directly
+    try std.testing.expect(@typeInfo(gen) == .@"struct");
+    try std.testing.expect(@typeInfo(combinators) == .@"struct");
     try std.testing.expect(@typeInfo(@TypeOf(check)) == .@"fn");
     try std.testing.expect(@TypeOf(Options) == type);
     try std.testing.expect(@TypeOf(TestCase) == type);

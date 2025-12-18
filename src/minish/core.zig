@@ -63,9 +63,12 @@ pub const TestCase = struct {
     /// Make a choice in the given range [min, max] (inclusive).
     pub fn choiceInRange(self: *TestCase, comptime T: type, min: T, max: T) GenError!T {
         if (min > max) return error.InvalidChoice;
-        const range = max - min;
-        const choice_val = try self.choice(@intCast(range));
-        return @as(T, @intCast(choice_val)) + min;
+        // Use wider arithmetic to avoid overflow when computing range
+        const min_wide: i128 = @intCast(min);
+        const max_wide: i128 = @intCast(max);
+        const range: u64 = @intCast(max_wide - min_wide);
+        const choice_val = try self.choice(range);
+        return @intCast(@as(i128, @intCast(choice_val)) + min_wide);
     }
 
     /// Make a weighted choice from a list of weights.
