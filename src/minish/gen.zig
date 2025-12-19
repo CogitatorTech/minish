@@ -172,6 +172,9 @@ pub fn char() Generator(u8) {
 
 /// Generate a single character from a specific character set.
 pub fn charFrom(comptime charset: []const u8) Generator(u8) {
+    comptime {
+        if (charset.len == 0) @compileError("charFrom requires a non-empty charset");
+    }
     const CharFromGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!u8 {
             const idx = try tc.choice(charset.len - 1);
@@ -342,10 +345,18 @@ pub const StringConfig = struct {
 /// Memory lifecycle: The returned string is owned by the Minish runner and will be
 /// freed automatically after the test property returns.
 pub fn string(comptime config: StringConfig) Generator([]const u8) {
+    comptime {
+        if (config.max_len < config.min_len) @compileError("string generator: max_len must be >= min_len");
+    }
     const StringGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![]const u8 {
             const len = config.min_len + try tc.choice(config.max_len - config.min_len);
             const chars = config.charset.getChars(config.custom_chars);
+
+            // Guard against empty charset
+            if (chars.len == 0) {
+                return error.InvalidChoice;
+            }
 
             var result = std.ArrayList(u8).empty;
             errdefer result.deinit(tc.allocator);
@@ -380,6 +391,9 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 /// Memory lifecycle: The returned slice and its elements (if allocated) are owned by
 /// the Minish runner and will be freed automatically after the test property returns.
 pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_len: usize, comptime max_len: usize) Generator([]const T) {
+    comptime {
+        if (max_len < min_len) @compileError("list generator: max_len must be >= min_len");
+    }
     const ListGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![]const T {
             const len = min_len + try tc.choice(max_len - min_len);
@@ -932,4 +946,217 @@ test "memory leak regression tests (generators)" {
     // Test Structure
     const struct_gen = structure(S, .{ .x = str_gen, .y = str_gen });
     try runner.check(allocator, struct_gen, Props.prop_no_op_struct, opts);
+}
+
+// ============================================================================
+// Regression Tests for Bug Fixes
+// ============================================================================
+
+test "regression: string generator with empty custom charset returns error" {
+    // Bug: Empty charset would cause underflow in tc.choice(chars.len - 1)
+    // Fix: Added guard to return InvalidChoice for empty charset
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Create a generator with empty custom charset
+    const empty_charset_gen = string(.{
+        .min_len = 1,
+        .max_len = 5,
+        .charset = .custom,
+        .custom_chars = "",
+    });
+
+    // Should return InvalidChoice error, not crash
+    const result = empty_charset_gen.generateFn(&tc);
+    try testing.expectError(core.GenError.InvalidChoice, result);
+}
+
+test "floatRange generator produces floats in range" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_range = floatRange(f32, -1.0, 1.0);
+    for (0..10) |_| {
+        const value = try gen_range.generateFn(&tc);
+        try testing.expect(value >= -1.0 and value <= 1.0);
+    }
+}
+
+test "char generator produces printable ASCII" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_char = char();
+    for (0..20) |_| {
+        const c = try gen_char.generateFn(&tc);
+        try testing.expect(c >= 32 and c <= 126);
+    }
+}
+
+test "charFrom generator uses specified charset" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_char = charFrom("abc");
+    for (0..20) |_| {
+        const c = try gen_char.generateFn(&tc);
+        try testing.expect(c == 'a' or c == 'b' or c == 'c');
+    }
+}
+
+test "enumValue generator produces valid enum values" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const Color = enum { Red, Green, Blue };
+    const gen_enum = enumValue(Color);
+
+    var got_red = false;
+    var got_green = false;
+    var got_blue = false;
+
+    for (0..50) |_| {
+        const c = try gen_enum.generateFn(&tc);
+        switch (c) {
+            .Red => got_red = true,
+            .Green => got_green = true,
+            .Blue => got_blue = true,
+        }
+    }
+    try testing.expect(got_red or got_green or got_blue);
+}
+
+test "uuid generator produces valid v4 format" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_uuid = uuid();
+    const value = try gen_uuid.generateFn(&tc);
+
+    // Check format: 8-4-4-4-12 with dashes at positions 8, 13, 18, 23
+    try testing.expect(value[8] == '-');
+    try testing.expect(value[13] == '-');
+    try testing.expect(value[18] == '-');
+    try testing.expect(value[23] == '-');
+    // UUID v4: position 14 should be '4'
+    try testing.expect(value[14] == '4');
+}
+
+test "timestamp generator produces valid timestamps" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_ts = timestamp();
+    const value = try gen_ts.generateFn(&tc);
+    try testing.expect(value >= 0 and value <= 2147483647);
+}
+
+test "timestampRange generator respects bounds" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_ts = timestampRange(1000, 2000);
+    for (0..20) |_| {
+        const value = try gen_ts.generateFn(&tc);
+        try testing.expect(value >= 1000 and value <= 2000);
+    }
+}
+
+test "nonEmptyList generator produces non-empty lists" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_list = nonEmptyList(i32, int(i32), 5);
+    const value = try gen_list.generateFn(&tc);
+    defer allocator.free(value);
+
+    try testing.expect(value.len >= 1);
+    try testing.expect(value.len <= 5);
+}
+
+test "nonEmptyString generator produces non-empty strings" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_str = nonEmptyString(.{ .max_len = 10 });
+    const value = try gen_str.generateFn(&tc);
+    defer allocator.free(value);
+
+    try testing.expect(value.len >= 1);
+    try testing.expect(value.len <= 10);
+}
+
+test "hashMap generator produces valid maps" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_map = hashMap(i32, bool, int(i32), boolean(), 1, 5);
+    var value = try gen_map.generateFn(&tc);
+    defer value.deinit();
+
+    try testing.expect(value.count() >= 1);
+    try testing.expect(value.count() <= 5);
+}
+
+test "tuple3 generator produces valid tuples" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_tuple = tuple3(i32, bool, u8, int(i32), boolean(), int(u8));
+    const value = try gen_tuple.generateFn(&tc);
+
+    _ = value[0]; // i32
+    _ = value[1]; // bool
+    _ = value[2]; // u8
+}
+
+test "oneOf generator selects from alternatives" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_one = oneOf(i32, &.{
+        intRange(i32, 0, 10),
+        intRange(i32, 100, 110),
+    });
+
+    for (0..20) |_| {
+        const value = try gen_one.generateFn(&tc);
+        try testing.expect((value >= 0 and value <= 10) or (value >= 100 and value <= 110));
+    }
+}
+
+test "dependent generator creates related values" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Generate a bool, then based on it generate 0 or 100
+    const makeSecond = struct {
+        fn make(first: bool) Generator(i32) {
+            return if (first) constant(@as(i32, 100)) else constant(@as(i32, 0));
+        }
+    }.make;
+
+    const gen_dep = dependent(bool, i32, boolean(), makeSecond);
+    const value = try gen_dep.generateFn(&tc);
+
+    // If first is true, second should be 100; if false, second should be 0
+    if (value[0]) {
+        try testing.expectEqual(@as(i32, 100), value[1]);
+    } else {
+        try testing.expectEqual(@as(i32, 0), value[1]);
+    }
 }

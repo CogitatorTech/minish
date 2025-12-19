@@ -93,6 +93,10 @@ pub const TestCase = struct {
 
         var total: u64 = 0;
         for (weights) |w| {
+            // Check for overflow
+            if (@addWithOverflow(total, w)[1] != 0) {
+                return error.InvalidChoice;
+            }
             total += w;
         }
         if (total == 0) return error.InvalidChoice;
@@ -108,3 +112,37 @@ pub const TestCase = struct {
         return weights.len - 1;
     }
 };
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+const testing = std.testing;
+
+test "regression: weighted choice detects overflow" {
+    // Bug: Summing weights could overflow u64 silently
+    // Fix: Added @addWithOverflow check
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Create weights that would overflow u64
+    const max_weight = std.math.maxInt(u64);
+    const overflow_weights = [_]u64{ max_weight, max_weight };
+
+    // Should return InvalidChoice error due to overflow
+    const result = tc.weightedChoice(&overflow_weights);
+    try testing.expectError(GenError.InvalidChoice, result);
+}
+
+test "weighted choice works with normal weights" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const normal_weights = [_]u64{ 10, 20, 30 };
+    const result = tc.weightedChoice(&normal_weights);
+    try testing.expect(result != error.InvalidChoice);
+    const idx = try result;
+    try testing.expect(idx < 3);
+}

@@ -2,9 +2,10 @@
 //!
 //! A property-based testing framework for Zig, inspired by [QuickCheck](https://hackage.haskell.org/package/QuickCheck) and [Hypothesis](https://hypothesis.readthedocs.io/en/latest/).
 //!
-//! Minish automatically generates random test cases and, on failure, minimises (shrinks)
+//! Minish automatically generates random test cases and, on failure, minimises (or shrinks)
 //! the input to the smallest value that still reproduces the failure. This makes debugging
 //! property violations a lot easier.
+//!
 //! ## Quick Start
 //!
 //! ```zig
@@ -49,7 +50,7 @@ pub const TestCase = @import("minish/core.zig").TestCase;
 /// Errors that can occur during generation.
 pub const GenError = @import("minish/core.zig").GenError;
 
-/// Run property-based tests with the given generator and property function.
+/// Run the tests with the given generator and property function.
 pub const check = @import("minish/runner.zig").check;
 
 /// Configuration options for property tests.
