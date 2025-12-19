@@ -66,11 +66,21 @@ fn generate_int(comptime T: type) fn (tc: *TestCase) core.GenError!T {
 }
 
 /// Generate random integers of any integer type.
+///
+/// Example:
+/// ```zig
+/// const my_int_gen = gen.int(u32);
+/// ```
 pub fn int(comptime T: type) Generator(T) {
     return .{ .generateFn = generate_int(T), .shrinkFn = shrink_mod.intShrinker(T), .freeFn = null };
 }
 
 /// Generate integers in a specific range [min, max] (inclusive).
+///
+/// Example:
+/// ```zig
+/// const byte_gen = gen.intRange(u8, 0, 10);
+/// ```
 pub fn intRange(comptime T: type, comptime min: T, comptime max: T) Generator(T) {
     const RangeGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
@@ -106,11 +116,21 @@ fn generate_float(comptime T: type) fn (tc: *TestCase) core.GenError!T {
 }
 
 /// Generate random floating point numbers.
+///
+/// Example:
+/// ```zig
+/// const valid_float = gen.float(f64);
+/// ```
 pub fn float(comptime T: type) Generator(T) {
     return .{ .generateFn = generate_float(T), .shrinkFn = shrink_mod.floatShrinker(T), .freeFn = null };
 }
 
 /// Generate floating point numbers in a specific range [min, max].
+///
+/// Example:
+/// ```zig
+/// const prob = gen.floatRange(f32, 0.0, 1.0);
+/// ```
 pub fn floatRange(comptime T: type, comptime min: T, comptime max: T) Generator(T) {
     const RangeGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
@@ -179,7 +199,15 @@ pub fn enumValue(comptime E: type) Generator(E) {
             }
             const idx = try tc.choice(fields.len - 1);
             // Return the enum value at index
-            return @enumFromInt(fields[idx].value);
+            // Create a runtime-accessible array of values
+            const all_values = blk: {
+                var vals: [fields.len]E = undefined;
+                inline for (fields, 0..) |f, i| {
+                    vals[i] = @enumFromInt(f.value);
+                }
+                break :blk vals;
+            };
+            return all_values[idx];
         }
     };
     return .{ .generateFn = EnumGenerator.generate, .shrinkFn = null, .freeFn = null };
@@ -300,6 +328,19 @@ pub const StringConfig = struct {
     custom_chars: ?[]const u8 = null,
 };
 
+/// Generate a random string based on configuration.
+///
+/// Example:
+/// ```zig
+/// const alpha_string = gen.string(.{
+///     .min_len = 5,
+///     .max_len = 20,
+///     .charset = .alpha
+/// });
+/// ```
+///
+/// Memory lifecycle: The returned string is owned by the Minish runner and will be
+/// freed automatically after the test property returns.
 pub fn string(comptime config: StringConfig) Generator([]const u8) {
     const StringGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![]const u8 {
@@ -328,6 +369,16 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 // Collection Generators
 // ============================================================================
 
+/// Generate a list of values.
+///
+/// Example:
+/// ```zig
+/// // Generate a list of 0 to 100 integers
+/// const list_gen = gen.list(i32, gen.int(i32), 0, 100);
+/// ```
+///
+/// Memory lifecycle: The returned slice and its elements (if allocated) are owned by
+/// the Minish runner and will be freed automatically after the test property returns.
 pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_len: usize, comptime max_len: usize) Generator([]const T) {
     const ListGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![]const T {
@@ -341,6 +392,11 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
         }
 
         fn free(allocator: std.mem.Allocator, value: []const T) void {
+            if (element_gen.freeFn) |freeFn| {
+                for (value) |item| {
+                    freeFn(allocator, item);
+                }
+            }
             allocator.free(value);
         }
     };
@@ -351,6 +407,15 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
 // HashMap Generator
 // ============================================================================
 
+/// Generate a HashMap with random keys and values.
+///
+/// Example:
+/// ```zig
+/// const map_gen = gen.hashMap(i32, bool, gen.int(i32), gen.boolean(), 0, 10);
+/// ```
+///
+/// Memory lifecycle: The returned HashMap and its contents are owned by the Minish runner
+/// and will be freed automatically. Do NOT manually deinit the map unless you clone it first.
 pub fn hashMap(
     comptime K: type,
     comptime V: type,
@@ -376,18 +441,30 @@ pub fn hashMap(
             return map;
         }
 
-        fn free(_: std.mem.Allocator, _: std.AutoHashMap(K, V)) void {
-            // NOTE: HashMap is intentionally NOT freed here.
-            // HashMap contains its own allocator reference and is passed by value.
-            // The test function is responsible for calling deinit() because:
-            // 1. The test function mutates the map and needs control over its lifetime
-            // 2. Multiple HashMap generators may share the same test function
-            // Calling deinit here would cause double-free if the test also calls deinit.
+        fn free(allocator: std.mem.Allocator, map: std.AutoHashMap(K, V)) void {
+            // We need to free keys and values if they have freeFn
+            if (key_gen.freeFn != null or value_gen.freeFn != null) {
+                var it = map.iterator();
+                while (it.next()) |entry| {
+                    if (key_gen.freeFn) |freeKey| {
+                        freeKey(allocator, entry.key_ptr.*);
+                    }
+                    if (value_gen.freeFn) |freeVal| {
+                        freeVal(allocator, entry.value_ptr.*);
+                    }
+                }
+            }
+            var mut_map = map;
+            mut_map.deinit();
         }
     };
     return .{ .generateFn = HashMapGenerator.generate, .shrinkFn = null, .freeFn = HashMapGenerator.free };
 }
 
+/// Generate a fixed-size array.
+///
+/// Memory lifecycle: The returned array matches the ownership of its elements.
+/// If elements are allocated, they will be freed automatically.
 pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Generator(T)) Generator([size]T) {
     const ArrayGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![size]T {
@@ -397,14 +474,23 @@ pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Gener
             }
             return result;
         }
+
+        fn free(allocator: std.mem.Allocator, value: [size]T) void {
+            if (element_gen.freeFn) |freeFn| {
+                for (value) |item| {
+                    freeFn(allocator, item);
+                }
+            }
+        }
     };
-    return .{ .generateFn = ArrayGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = ArrayGenerator.generate, .shrinkFn = null, .freeFn = ArrayGenerator.free };
 }
 
 // ============================================================================
 // Option/Nullable Generator
 // ============================================================================
 
+/// Generate an optional value (Some or None).
 pub fn optional(comptime T: type, comptime element_gen: Generator(T)) Generator(?T) {
     const OptionalGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!?T {
@@ -414,8 +500,16 @@ pub fn optional(comptime T: type, comptime element_gen: Generator(T)) Generator(
             }
             return null;
         }
+
+        fn free(allocator: std.mem.Allocator, value: ?T) void {
+            if (value) |v| {
+                if (element_gen.freeFn) |freeFn| {
+                    freeFn(allocator, v);
+                }
+            }
+        }
     };
-    return .{ .generateFn = OptionalGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = OptionalGenerator.generate, .shrinkFn = null, .freeFn = OptionalGenerator.free };
 }
 
 // ============================================================================
@@ -436,6 +530,9 @@ pub fn constant(comptime value: anytype) Generator(@TypeOf(value)) {
 // ============================================================================
 
 /// Generate a 2-tuple with generic types.
+///
+/// Memory lifecycle: The tuple and its elements are owned by the Minish runner
+/// and will be freed automatically.
 pub fn tuple2(comptime T1: type, comptime T2: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2)) Generator(struct { T1, T2 }) {
     const TupleGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!struct { T1, T2 } {
@@ -444,11 +541,19 @@ pub fn tuple2(comptime T1: type, comptime T2: type, comptime gen1: Generator(T1)
                 try gen2.generateFn(tc),
             };
         }
+
+        fn free(allocator: std.mem.Allocator, value: struct { T1, T2 }) void {
+            if (gen1.freeFn) |freeFn| freeFn(allocator, value[0]);
+            if (gen2.freeFn) |freeFn| freeFn(allocator, value[1]);
+        }
     };
-    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = TupleGenerator.free };
 }
 
 /// Generate a 3-tuple with generic types.
+///
+/// Memory lifecycle: The tuple and its elements are owned by the Minish runner
+/// and will be freed automatically.
 pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2), comptime gen3: Generator(T3)) Generator(struct { T1, T2, T3 }) {
     const TupleGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!struct { T1, T2, T3 } {
@@ -458,8 +563,14 @@ pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime 
                 try gen3.generateFn(tc),
             };
         }
+
+        fn free(allocator: std.mem.Allocator, value: struct { T1, T2, T3 }) void {
+            if (gen1.freeFn) |freeFn| freeFn(allocator, value[0]);
+            if (gen2.freeFn) |freeFn| freeFn(allocator, value[1]);
+            if (gen3.freeFn) |freeFn| freeFn(allocator, value[2]);
+        }
     };
-    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = TupleGenerator.free };
 }
 
 // Legacy tuple function for backwards compatibility
@@ -479,6 +590,17 @@ pub fn tuple() Generator(struct { i32, i32 }) {
 // ============================================================================
 
 /// Choose one generator from a list with equal probability.
+///
+/// Example:
+/// ```zig
+/// const mixed_gen = gen.oneOf(i32, &.{
+///     gen.intRange(i32, 0, 10),
+///     gen.constant(@as(i32, 100))
+/// });
+/// ```
+///
+/// Memory lifecycle: The returned value is owned by the Minish runner and will be freed automatically.
+/// Note: This assumes all generators share compatible memory management logic (e.g., typically same type).
 pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Generator(T) {
     const OneOfGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
@@ -486,8 +608,27 @@ pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Genera
             const idx = try tc.choice(generators.len - 1);
             return generators[idx].generateFn(tc);
         }
+
+        fn free(allocator: std.mem.Allocator, value: T) void {
+            // We don't know which generator created it, so we can't easily free it recursively
+            // without storing which generator was used.
+            // However, for OneOf, we assume all generators produce the same type T.
+            // If T has a single canonical free strategy (e.g. it's a struct with known fields),
+            // we could try to free it.
+            // But if T implies different allocation strategies per variant, it's hard.
+            // BEST EFFORT: Use the freeFn of the first generator if available?
+            // Or iterate generators? No, that's wrong.
+
+            // Correct approach: OneOf should return a wrapper or we accept that strict heterogeneity
+            // isn't supported for managed types OR we require all generators to share a freeFn logic.
+            // For now, let's assume if the first generator has a freeFn, it works for all
+            // (often they are same type generators).
+            if (generators.len > 0 and generators[0].freeFn != null) {
+                generators[0].freeFn.?(allocator, value);
+            }
+        }
     };
-    return .{ .generateFn = OneOfGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = OneOfGenerator.generate, .shrinkFn = null, .freeFn = OneOfGenerator.free };
 }
 
 // ============================================================================
@@ -497,6 +638,18 @@ pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Genera
 /// Generate a struct with the given field generators.
 /// The field_gens parameter should be an anonymous struct where each field
 /// corresponds to a field in T and contains the generator for that field.
+///
+/// Example:
+/// ```zig
+/// const User = struct { id: u32, name: []const u8 };
+/// const user_gen = gen.structure(User, .{
+///     .id = gen.int(u32),
+///     .name = gen.string(.{ .min_len = 1 })
+/// });
+/// ```
+///
+/// Memory lifecycle: The returned struct and its fields are owned by the Minish runner
+/// and will be freed automatically.
 pub fn structure(
     comptime T: type,
     comptime field_gens: anytype,
@@ -518,8 +671,18 @@ pub fn structure(
 
             return result;
         }
+
+        fn free(allocator: std.mem.Allocator, value: T) void {
+            const struct_info = @typeInfo(T).@"struct";
+            inline for (struct_info.fields) |field| {
+                const field_gen = @field(field_gens, field.name);
+                if (field_gen.freeFn) |freeFn| {
+                    freeFn(allocator, @field(value, field.name));
+                }
+            }
+        }
     };
-    return .{ .generateFn = StructGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = StructGenerator.generate, .shrinkFn = null, .freeFn = StructGenerator.free };
 }
 
 // ============================================================================
@@ -541,8 +704,20 @@ pub fn dependent(
             const second_val = try second_gen.generateFn(tc);
             return .{ first_val, second_val };
         }
+
+        fn free(allocator: std.mem.Allocator, value: struct { T, U }) void {
+            if (first_gen.freeFn) |freeFn| {
+                freeFn(allocator, value[0]);
+            }
+            // For the dependent value, we need to regenerate the generator to access its freeFn.
+            // Ideally core.Generator would be uniform, but here make_gen is a function.
+            const second_gen = make_gen(value[0]);
+            if (second_gen.freeFn) |freeFn| {
+                freeFn(allocator, value[1]);
+            }
+        }
     };
-    return .{ .generateFn = DependentGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = DependentGenerator.generate, .shrinkFn = null, .freeFn = DependentGenerator.free };
 }
 
 // ============================================================================
@@ -718,4 +893,43 @@ test "float generator produces valid floats" {
     // Should not be NaN or Inf initially (though it could be)
     // Just verify it's a float
     _ = value;
+}
+
+test "memory leak regression tests (generators)" {
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+    const str_gen = comptime string(.{ .min_len = 1, .max_len = 5 });
+    const int_gen = comptime int(u32);
+
+    const opts = runner.Options{ .seed = 111, .num_runs = 10 };
+
+    // Helper no-ops
+    const S = struct { x: []const u8, y: []const u8 };
+    const Props = struct {
+        fn prop_no_op(_: []const u8) !void {}
+        fn prop_no_op_array(_: [3][]const u8) !void {}
+        fn prop_no_op_map(_: std.AutoHashMap(u32, []const u8)) !void {}
+        fn prop_no_op_opt(_: ?[]const u8) !void {}
+        fn prop_no_op_tuple(_: struct { []const u8, []const u8 }) !void {}
+        fn prop_no_op_struct(_: S) !void {}
+    };
+
+    // Test List
+    try runner.check(allocator, str_gen, Props.prop_no_op, opts);
+
+    // Test Array
+    try runner.check(allocator, array([]const u8, 3, str_gen), Props.prop_no_op_array, opts);
+
+    // Test HashMap (u32 -> string)
+    try runner.check(allocator, hashMap(u32, []const u8, int_gen, str_gen, 1, 5), Props.prop_no_op_map, opts);
+
+    // Test Optional
+    try runner.check(allocator, optional([]const u8, str_gen), Props.prop_no_op_opt, opts);
+
+    // Test Tuple
+    try runner.check(allocator, tuple2([]const u8, []const u8, str_gen, str_gen), Props.prop_no_op_tuple, opts);
+
+    // Test Structure
+    const struct_gen = structure(S, .{ .x = str_gen, .y = str_gen });
+    try runner.check(allocator, struct_gen, Props.prop_no_op_struct, opts);
 }

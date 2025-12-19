@@ -22,7 +22,7 @@ fn adult_flag_is_consistent(person: Person) !void {
 
 // Property: height should be reasonable for the age
 fn height_is_reasonable(person: Person) !void {
-    // Very basic check - just ensure height isn't absurdly large or small
+    // Very basic check - just make sure height isn't absurdly large or small
     try std.testing.expect(person.height_cm >= 30); // Even babies are >30cm
     try std.testing.expect(person.height_cm <= 250); // Very tall but possible
 }

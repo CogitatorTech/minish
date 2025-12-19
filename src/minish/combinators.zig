@@ -18,6 +18,12 @@ const Generator = gen.Generator;
 // ============================================================================
 
 /// Transform the output of a generator using a mapping function.
+///
+/// Example:
+/// ```zig
+/// // Convert generated integers to strings
+/// const string_gen = combinators.map(i32, []const u8, gen.int(i32), intToString);
+/// ```
 pub fn map(
     comptime T: type,
     comptime U: type,
@@ -38,6 +44,12 @@ pub fn map(
 // ============================================================================
 
 /// Chain generators - use the output of one generator to create another.
+///
+/// Example:
+/// ```zig
+/// // Generate a length, then a list of that length
+/// const list_gen = combinators.flatMap(usize, []const u8, gen.intRange(usize, 1, 10), makeListGen);
+/// ```
 pub fn flatMap(
     comptime T: type,
     comptime U: type,
@@ -60,6 +72,14 @@ pub fn flatMap(
 
 /// Generate values that satisfy a predicate.
 /// WARNING: This can loop indefinitely if the predicate is rarely satisfied.
+///
+/// Example:
+/// ```zig
+/// const even_gen = combinators.filter(i32, gen.int(i32), isEven, 100);
+/// ```
+///
+/// Memory lifecycle: Generated values that fail the predicate are automatically freed if associated generator has a freeFn.
+/// The retained value is owned by the Minish runner.
 pub fn filter(
     comptime T: type,
     comptime base_gen: Generator(T),
@@ -74,11 +94,21 @@ pub fn filter(
                 if (predicate(value)) {
                     return value;
                 }
+                // Free rejected value if generator provides freeFn
+                if (base_gen.freeFn) |freeFn| {
+                    freeFn(tc.allocator, value);
+                }
             }
             return error.Overrun;
         }
+
+        fn free(allocator: std.mem.Allocator, value: T) void {
+            if (base_gen.freeFn) |freeFn| {
+                freeFn(allocator, value);
+            }
+        }
     };
-    return .{ .generateFn = FilterGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = FilterGenerator.generate, .shrinkFn = null, .freeFn = FilterGenerator.free };
 }
 
 // ============================================================================
@@ -101,6 +131,18 @@ pub fn sized(
 // ============================================================================
 
 /// Choose from generators with weighted probabilities.
+///
+/// Example:
+/// ```zig
+/// // 90% chance of 0, 10% chance of random int
+/// const biased_gen = combinators.frequency(i32, &.{
+///     .{ .weight = 90, .gen = gen.constant(@as(i32, 0)) },
+///     .{ .weight = 10, .gen = gen.int(i32) }
+/// });
+/// ```
+///
+/// Memory lifecycle: The returned value is owned by the Minish runner and will be freed automatically.
+/// Assumes all weighted generators share compatible memory management.
 pub fn frequency(
     comptime T: type,
     comptime weighted_gens: []const struct { weight: u64, gen: Generator(T) },
@@ -118,9 +160,62 @@ pub fn frequency(
             const idx = try tc.weightedChoice(&weights);
             return weighted_gens[idx].gen.generateFn(tc);
         }
+
+        fn free(allocator: std.mem.Allocator, value: T) void {
+            // Assume homogeneity: use first generator's freeFn if available
+            if (weighted_gens.len > 0 and weighted_gens[0].gen.freeFn != null) {
+                weighted_gens[0].gen.freeFn.?(allocator, value);
+            }
+        }
     };
-    return .{ .generateFn = FrequencyGenerator.generate, .shrinkFn = null, .freeFn = null };
+    return .{ .generateFn = FrequencyGenerator.generate, .shrinkFn = null, .freeFn = FrequencyGenerator.free };
 }
 
 // Note: Combinator tests are demonstrated in examples/e5_struct_and_combinators.zig
 // They cannot be easily unit tested due to comptime parameter requirements
+
+test "combinator memory leak regression tests" {
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+    const str_gen = comptime gen.string(.{ .min_len = 1, .max_len = 5 });
+
+    const opts = runner.Options{ .seed = 111, .num_runs = 10 };
+
+    const Props = struct {
+        fn prop_no_op(_: []const u8) !void {}
+    };
+
+    // Test Frequency
+    const freq_gen = frequency([]const u8, &.{
+        .{ .weight = 10, .gen = str_gen },
+        .{ .weight = 10, .gen = str_gen },
+    });
+    try runner.check(allocator, freq_gen, Props.prop_no_op, opts);
+}
+
+test "filter memory leak regression test" {
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+
+    // Generate strings, keep only those starting with 'A'.
+    // Rejected strings (allocations) should be freed by filter.
+    const str_gen = comptime gen.string(.{ .min_len = 1, .max_len = 5, .charset = .alphanumeric });
+
+    const startsWithA = struct {
+        fn func(s: []const u8) bool {
+            if (s.len == 0) return false;
+            return s[0] == 'A';
+        }
+    }.func;
+
+    // We filter, max 1000 attempts to allow many rejections without failure.
+    const filtered_gen = filter([]const u8, str_gen, startsWithA, 1000);
+
+    const opts = runner.Options{ .seed = 111, .num_runs = 10 };
+
+    const Props = struct {
+        fn prop_no_op(_: []const u8) !void {}
+    };
+
+    try runner.check(allocator, filtered_gen, Props.prop_no_op, opts);
+}

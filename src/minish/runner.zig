@@ -26,6 +26,18 @@ pub const Options = struct {
     verbose: bool = false,
 };
 
+/// Run property-based tests with the given generator and property function.
+///
+/// Execution details:
+/// - Runs the test `options.num_runs` times (default 100).
+/// - If `test_fn` returns an error (property failure), shrinking begins.
+/// - Shrinking attempts to find a minimal input that still causes failure.
+///
+/// Memory management:
+/// - The generated `value` passed to `test_fn` is owned by the test runner.
+/// - The runner will strictly `defer` freeing the value after `test_fn` returns.
+/// - **Do not** free/deinit the value inside `test_fn` unless you have cloned it.
+/// - If `test_fn` mutates the value destructively (e.g. `deinit`), use a clone.
 pub fn check(
     allocator: Allocator,
     generator: anytype,

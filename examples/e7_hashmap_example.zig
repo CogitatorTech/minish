@@ -4,7 +4,7 @@ const gen = minish.gen;
 
 // Property: getting a value we just put should return that value
 fn put_then_get_returns_value(map: std.AutoHashMap(i32, i32)) !void {
-    var mut_map = map;
+    var mut_map = try map.clone();
     defer mut_map.deinit();
 
     // Try putting and getting a known value
@@ -22,10 +22,8 @@ fn put_then_get_returns_value(map: std.AutoHashMap(i32, i32)) !void {
 
 // Property: map size should match number of unique keys inserted
 fn map_count_matches_entries(map: std.AutoHashMap(i32, bool)) !void {
-    var mut_map = map;
-    defer mut_map.deinit();
-
-    const count = mut_map.count();
+    // Treat as read-only, Minish will free it.
+    const count = map.count();
 
     // Count should be reasonable (not negative, not absurd)
     try std.testing.expect(count >= 0);
@@ -34,7 +32,7 @@ fn map_count_matches_entries(map: std.AutoHashMap(i32, bool)) !void {
 
 // Property: removing a key that doesn't exist returns false
 fn remove_nonexistent_key(map: std.AutoHashMap(i32, i32)) !void {
-    var mut_map = map;
+    var mut_map = try map.clone();
     defer mut_map.deinit();
 
     // Try to remove a key that's very unlikely to exist

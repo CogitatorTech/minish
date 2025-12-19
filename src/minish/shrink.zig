@@ -3,6 +3,12 @@
 //! When a property test fails, shrinking tries to find the smallest input
 //! that still causes the failure. This makes debugging much easier.
 //!
+//! Strategies:
+//! - **Integers/Floats**: Uses binary search to efficiently find the boundary between
+//!   passing and failing values. This guarantees finding the minimal failure
+//!   (e.g., finding 9 if the failure is > 8).
+//! - **Collections**: Removes elements from the beginning, end, or middle to reduce size.
+//!
 //! Each shrinker produces an `Iterator` of progressively smaller values.
 //! The test runner tries each candidate until no smaller failing input exists.
 
@@ -59,9 +65,10 @@ pub fn Iterator(comptime T: type) type {
 fn IntShrinkContext(comptime T: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        val: T,
-        target: T,
-        diff: T,
+        failing_bound: T, // The original failing value (bad)
+        current_bound: T, // The current "safe" value (good) (starts at target usually)
+        last_tried: T, // The last value returned by next()
+        first_call: bool,
     };
 }
 
@@ -69,17 +76,40 @@ fn makeIntShrinkNext(comptime T: type) *const fn (*anyopaque) ?T {
     return struct {
         fn next(ctx: *anyopaque) ?T {
             const context: *IntShrinkContext(T) = @ptrCast(@alignCast(ctx));
-            if (context.diff == 0) return null;
 
-            // Move value towards target
-            const result = if (context.val > context.target)
-                context.val - context.diff
+            // If we are called, it means the *previous* value passed the test (was not a failure).
+            // So the previous value is our new "safe" bound.
+            // UNLESS this is the very first call (indicated by first_call flag).
+
+            if (!context.first_call) {
+                context.current_bound = context.last_tried;
+            }
+            context.first_call = false;
+
+            // We search between current_bound (safe) and failing_bound (known failure).
+            // Calculate mid point.
+
+            // Check if bounds are adjacent or same
+            const dist = if (context.failing_bound > context.current_bound)
+                context.failing_bound - context.current_bound
             else
-                context.val + context.diff;
+                context.current_bound - context.failing_bound;
 
-            context.val = result;
-            context.diff = @divTrunc(context.diff, 2);
-            return result;
+            if (dist < 2) return null;
+
+            const half_dist = @divTrunc(dist, 2);
+
+            const next_val = if (context.failing_bound > context.current_bound)
+                context.current_bound + half_dist
+            else
+                context.current_bound - half_dist;
+
+            // If we generated the same value again (due to truncation), stop.
+            if (next_val == context.current_bound or next_val == context.failing_bound) return null;
+            if (next_val == context.last_tried) return null;
+
+            context.last_tried = next_val;
+            return next_val;
         }
     }.next;
 }
@@ -104,19 +134,12 @@ pub fn intTowards(comptime T: type, allocator: std.mem.Allocator, value: T, targ
     const Context = IntShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator(T).empty();
 
-    // Calculate initial diff (distance to target, halved)
-    const diff = if (value > target)
-        @divTrunc(value - target, 2)
-    else if (value < target)
-        @divTrunc(target - value, 2)
-    else
-        0;
-
     context.* = .{
         .allocator = allocator,
-        .val = value,
-        .target = target,
-        .diff = diff,
+        .failing_bound = value,
+        .current_bound = target,
+        .last_tried = target, // Doesn't matter, just init
+        .first_call = true,
     };
 
     return .{
@@ -142,9 +165,10 @@ pub fn intShrinker(comptime T: type) *const fn (std.mem.Allocator, T) Iterator(T
 fn FloatShrinkContext(comptime T: type) type {
     return struct {
         allocator: std.mem.Allocator,
-        val: T,
-        target: T,
-        diff: T,
+        failing_bound: T,
+        current_bound: T,
+        last_tried: T,
+        first_call: bool,
     };
 }
 
@@ -153,18 +177,28 @@ fn makeFloatShrinkNext(comptime T: type) *const fn (*anyopaque) ?T {
         fn next(ctx: *anyopaque) ?T {
             const context: *FloatShrinkContext(T) = @ptrCast(@alignCast(ctx));
 
-            // Stop when diff is very small
-            if (@abs(context.diff) < 1e-10) return null;
+            if (!context.first_call) {
+                context.current_bound = context.last_tried;
+            }
+            context.first_call = false;
 
-            // Move value towards target
-            const result = if (context.val > context.target)
-                context.val - context.diff
+            const diff = if (context.failing_bound > context.current_bound)
+                context.failing_bound - context.current_bound
             else
-                context.val + context.diff;
+                context.current_bound - context.failing_bound;
 
-            context.val = result;
-            context.diff = context.diff / 2.0;
-            return result;
+            if (diff < 1e-10) return null; // Precision limit
+
+            const next_val = if (context.failing_bound > context.current_bound)
+                context.current_bound + (diff / 2.0)
+            else
+                context.current_bound - (diff / 2.0);
+
+            // Check for stagnation due to float precision
+            if (next_val == context.current_bound or next_val == context.failing_bound) return null;
+
+            context.last_tried = next_val;
+            return next_val;
         }
     }.next;
 }
@@ -188,17 +222,12 @@ pub fn floatTowards(comptime T: type, allocator: std.mem.Allocator, value: T, ta
     const Context = FloatShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator(T).empty();
 
-    // Calculate initial diff
-    const diff = if (value > target)
-        (value - target) / 2.0
-    else
-        (target - value) / 2.0;
-
     context.* = .{
         .allocator = allocator,
-        .val = value,
-        .target = target,
-        .diff = diff,
+        .failing_bound = value,
+        .current_bound = target,
+        .last_tried = target,
+        .first_call = true,
     };
 
     return .{
@@ -678,12 +707,12 @@ test "int shrinking moves values towards zero" {
     var it = int(i32, allocator, 100);
     defer it.deinit();
 
-    var prev: i32 = 100;
     var count: usize = 0;
     while (it.next()) |val| {
-        // Values should move closer to zero (target)
-        try testing.expect(@abs(val) <= @abs(prev));
-        prev = val;
+        // With binary search, values might not be strictly monotonic if we assume "pass".
+        // But they should be between target (0) and start (100).
+        try testing.expect(val >= 0);
+        try testing.expect(val <= 100);
         count += 1;
         if (count > 20) break; // Safety limit
     }
@@ -795,11 +824,10 @@ test "float shrinking moves towards zero" {
     var it = float(f64, allocator, 100.0);
     defer it.deinit();
 
-    var prev: f64 = 100.0;
     var count: usize = 0;
     while (it.next()) |val| {
-        try testing.expect(@abs(val) <= @abs(prev));
-        prev = val;
+        try testing.expect(val >= 0.0);
+        try testing.expect(val <= 100.0);
         count += 1;
         if (count > 30) break; // Safety limit
     }

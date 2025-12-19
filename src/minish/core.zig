@@ -20,7 +20,12 @@ pub const GenError = error{
 };
 
 /// TestCase manages the state for a single property test run.
-/// It tracks random choices made during generation to enable shrinking.
+///
+/// Responsibilities:
+/// - **Randomness**: Provides the source of random choices for generators.
+/// - **Recording**: Records every choice made during generation. This trace is used
+///   reproduce failures or to guide shrinking (by modifying the trace).
+/// - **Shrinking**: When replaying for shrinking, can force specific choices.
 pub const TestCase = struct {
     allocator: Allocator,
     prng: DefaultPrng,

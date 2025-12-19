@@ -38,8 +38,8 @@ following steps:
 2. Finding cases where the input causes the property to fail.
 3. Finding smaller subsets of the failing input that still cause the failure (this is called "shrinking").
 
-For example, consider the property of a `reverse(s: string)` function that states that reversing a string twice should
-return the original string.
+For example, consider the property of a `reverse(s: []const u8)` function that states that reversing
+a string twice should return the original string.
 In property-based testing, you would define this property and let the framework generate a lot of random strings to
 test it.
 If it finds a string that makes the property fail (due to a bug in the reverse function, for example), it will then try
@@ -47,12 +47,12 @@ to shrink that string to a simpler or shorter case that still makes the property
 
 Here is a brief comparison between example-based testing and property-based testing paradigms:
 
-| Aspect        | Example-based Testing          | Property-based Testing                     |
-|---------------|--------------------------------|--------------------------------------------|
-| **Input**     | Hand-written specific values   | Auto-generated random values               |
-| **Coverage**  | Only cases you can think of    | Discovers edge cases automatically         |
-| **Debugging** | Exact failing inputs are known | Shrinks to minimal failing case            |
-| **Effort**    | Write a lot of test cases      | Define one property, test with many inputs |
+| Criterion | Example-based Testing          | Property-based Testing                     |
+|-----------|--------------------------------|--------------------------------------------|
+| Input     | Hand-written specific values   | Auto-generated random values               |
+| Coverage  | Only cases you can think of    | Discovers edge cases automatically         |
+| Debugging | Exact failing inputs are known | Shrinks to minimal failing case            |
+| Effort    | Write a lot of test cases      | Define one property, test with many inputs |
 
 ### Why Minish?
 
@@ -63,7 +63,7 @@ Here is a brief comparison between example-based testing and property-based test
 - Supports reproducible failures and verbose mode
 - Configurable and easy to integrate into existing Zig projects
 
-See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
+See [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
 
 > [!IMPORTANT]
 > Minish is in early development, so bugs and breaking changes are expected.

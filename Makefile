@@ -6,7 +6,7 @@ BUILD_TYPE    ?= Debug
 BUILD_OPTS    ?= -Doptimize=$(BUILD_TYPE)
 JOBS          ?= $(shell nproc || echo 2)
 
-# Helper macro to ensure the Zig compiler exists
+# Helper macro to guarantee the Zig compiler exists
 check_zig = \
     if [ ! -x "$(ZIG)" ]; then \
       echo "ERROR: Zig compiler not found at '$(ZIG)'."; \
