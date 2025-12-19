@@ -1,6 +1,6 @@
 .{
     .name = .minish,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0x4a0e1bdb4d520b49, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{ .chilli = .{
