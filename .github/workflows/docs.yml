@@ -6,6 +6,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+    group: 'publish-docs'
+    cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -19,7 +23,7 @@ jobs:
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: '0.14.1'
+          version: '0.15.2'
 
       - name: Install System Dependencies
         run: |

@@ -9,6 +9,10 @@ on:
     branches:
       - main
 
+concurrency:
+    group: 'lints'
+    cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -23,12 +27,12 @@ jobs:
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: '0.14.1'
+          version: '0.15.2'
 
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y make
 
-      - name: Run Linters
+      - name: Run Linter Checks
         run: make lint
