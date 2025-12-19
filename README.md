@@ -19,39 +19,83 @@ A property-based testing framework for Zig
 
 ---
 
-Minish is a [property-based testing](https://en.wikipedia.org/wiki/Software_testing#Property_testing) framework for Zig.
-It is inspired by [QuickCheck](https://hackage.haskell.org/package/QuickCheck)
-and [Hypothesis](https://hypothesis.readthedocs.io/en/latest/) frameworks.
-Minish allows you to write tests that verify the correctness of your code by checking that certain properties always
-hold true instead of writing individual test cases.
-It automatically generates random inputs and shrinks failing cases to find minimal counterexamples that break your
-assumptions about your code.
+Minish is a small [property-based testing](https://en.wikipedia.org/wiki/Software_testing#Property_testing) framework
+for Zig,
+inspired by [QuickCheck](https://hackage.haskell.org/package/QuickCheck)
+and [Hypothesis](https://hypothesis.readthedocs.io/en/latest/).
 
-### Features
+### What is Property-based Testing?
 
-- 25+ built-in generators (integers, floats, strings, lists, structs, UUIDs, timestamps, etc.)
-- Composable combinators (map, filter, flatMap, frequency)
-- Automatic shrinking for integers, floats, strings, lists, tuples, and arrays
-- Configurable max shrink attempts and verbose mode
-- Reproducible failures
+Property-based testing is a way of testing software by defining properties that should always hold.
+Compared to typical example-based testing (like unit tests), instead of writing individual test cases with specific
+inputs and expected outputs, you define general properties about your code's behavior.
+The testing framework then generates a wide range of random inputs to verify that these properties hold for all cases.
+
+Given a piece of code like a function and its property, a property-based testing workflow normally involves the
+following steps:
+
+1. Generating a lot of random inputs.
+2. Finding cases where the input causes the property to fail.
+3. Finding smaller subsets of the failing input that still cause the failure (this is called "shrinking").
+
+For example, consider the property of a `reverse(s: string)` function that states that reversing a string twice should
+return the original string.
+In property-based testing, you would define this property and let the framework generate a lot of random strings to
+test it.
+If it finds a string that makes the property fail (due to a bug in the reverse function, for example), it will then try
+to shrink that string to a simpler or shorter case that still makes the property fail.
+
+Here is a brief comparison between example-based testing and property-based testing paradigms:
+
+| Aspect        | Example-based Testing          | Property-based Testing                     |
+|---------------|--------------------------------|--------------------------------------------|
+| **Input**     | Hand-written specific values   | Auto-generated random values               |
+| **Coverage**  | Only cases you can think of    | Discovers edge cases automatically         |
+| **Debugging** | Exact failing inputs are known | Shrinks to minimal failing case            |
+| **Effort**    | Write a lot of test cases      | Define one property, test with many inputs |
+
+### Why Minish?
+
+- Written in pure Zig with no external dependencies
+- Includes over 25 built-in generators (like for integers, floats, strings, lists, structs, UUIDs, timestamps, etc.)
+- Combinators to build complex generators from simple ones (map, filter, flatMap, frequency)
+- Supports automatic shrinking for integers, floats, strings, lists, tuples, and arrays
+- Supports reproducible failures and verbose mode
+- Configurable and easy to integrate into existing Zig projects
+
+See the [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
+
+> [!IMPORTANT]
+> Minish is in early development, so bugs and breaking changes are expected.
+> Please use the [issues page](https://github.com/CogitatorTech/minish/issues) to report bugs or request features.
 
 ---
 
-### Quick Start
+### Getting Started
+
+You can add Minish to your project and start using it by following the steps below.
 
 #### Installation
 
-Add Minish to your project:
+Run the following command in the root directory of your project to download Minish:
 
 ```sh
-zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/main.tar.gz"
+zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch_or_tag>.tar.gz"
 ```
 
-Update your `build.zig`:
+Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.1.0`.
+This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
+
+> [!NOTE]
+> Minsih is developed and tested with Zig version 0.15.2.
+
+#### Adding to Build Script
+
+Next, modify your `build.zig` file to make Minish available to your build target as a module.
 
 ```zig
 pub fn build(b: *std.Build) void {
-    // ... your existing setup ...
+    // ... the existing setup ...
 
     const minish_dep = b.dependency("minish", .{});
     const minish_module = minish_dep.module("minish");
@@ -60,6 +104,8 @@ pub fn build(b: *std.Build) void {
 ```
 
 #### A Simple Example
+
+Finally, you can `@import("minish")` and start using it in your Zig project.
 
 ```zig
 const std = @import("std");
