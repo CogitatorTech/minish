@@ -1,6 +1,6 @@
 <div align="center">
   <picture>
-    <img alt="Minish Logo" src="logo.svg" height="30%" width="30%">
+    <img alt="Minish Logo" src="logo.svg" height="25%" width="25%">
   </picture>
 <br>
 
@@ -20,9 +20,12 @@ A property-based testing framework for Zig
 ---
 
 Minish is a [property-based testing](https://en.wikipedia.org/wiki/Software_testing#Property_testing) framework for Zig.
-It is inspired by [QuickCheck](https://hackage.haskell.org/package/QuickCheck) and [Hypothesis](https://hypothesis.readthedocs.io/en/latest/) frameworks.
-Minish allows you to write tests that verify the correctness of your code by checking that certain properties always hold true instead of writing individual test cases.
-It automatically generates random inputs and shrinks failing cases to find minimal counterexamples that break your assumptions about your code.
+It is inspired by [QuickCheck](https://hackage.haskell.org/package/QuickCheck)
+and [Hypothesis](https://hypothesis.readthedocs.io/en/latest/) frameworks.
+Minish allows you to write tests that verify the correctness of your code by checking that certain properties always
+hold true instead of writing individual test cases.
+It automatically generates random inputs and shrinks failing cases to find minimal counterexamples that break your
+assumptions about your code.
 
 ### Features
 
@@ -30,7 +33,7 @@ It automatically generates random inputs and shrinks failing cases to find minim
 - Composable combinators (map, filter, flatMap, frequency)
 - Automatic shrinking for integers, floats, strings, lists, tuples, and arrays
 - Configurable max shrink attempts and verbose mode
-- Reproducible failures with seed output
+- Reproducible failures
 
 ---
 
@@ -100,13 +103,21 @@ pub fn main() !void {
 
 ### Documentation
 
-To be added.
+You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).
+
+Alternatively, you can use the `make docs` command to generate the documentation for the current version of Minish.
+This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
+and view in a web browser.
+
+### Examples
+
+Check out the [examples](examples) directory for example usages of Minish.
 
 ---
 
 ### Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to make a contribution.
 
 ### License
 
@@ -114,4 +125,4 @@ Minish is licensed under the Apache License, Version 2.0 (see [LICENSE](LICENSE)
 
 ### Acknowledgements
 
-- Logo is from [SVG Repo](https://www.svgrepo.com/svg/532646/hat-witch) with some modifications.
+* The logo is from [SVG Repo](https://www.svgrepo.com/svg/426957/hat) with some modifications.

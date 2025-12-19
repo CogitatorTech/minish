@@ -1,7 +1,7 @@
 # ################################################################################
 # # Configuration
 # ################################################################################
-ZIG    ?= $(shell which zig || echo ~/.local/share/zig/0.15.1/zig)
+ZIG    ?= $(shell which zig || echo ~/.local/share/zig/0.15.2/zig)
 BUILD_TYPE    ?= Debug
 BUILD_OPTS    ?= -Doptimize=$(BUILD_TYPE)
 JOBS          ?= $(shell nproc || echo 2)
@@ -10,7 +10,7 @@ JOBS          ?= $(shell nproc || echo 2)
 check_zig = \
     if [ ! -x "$(ZIG)" ]; then \
       echo "ERROR: Zig compiler not found at '$(ZIG)'."; \
-      echo "       Install Zig 0.15.1 and/or set ZIG=/path/to/zig."; \
+      echo "       Install Zig 0.15.2 and/or set ZIG=/path/to/zig."; \
       echo "       See: https://ziglang.org/download/"; \
       exit 1; \
     fi

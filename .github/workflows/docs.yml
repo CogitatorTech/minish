@@ -7,8 +7,8 @@ on:
       - 'v*'
 
 concurrency:
-    group: 'publish-docs'
-    cancel-in-progress: true
+  group: 'publish-docs'
+  cancel-in-progress: true
 
 permissions:
   contents: write

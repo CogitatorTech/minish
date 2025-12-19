@@ -10,8 +10,8 @@ on:
       - main
 
 concurrency:
-    group: 'lints'
-    cancel-in-progress: true
+  group: 'lints'
+  cancel-in-progress: true
 
 permissions:
   contents: read

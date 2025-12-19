@@ -7,25 +7,25 @@ This document outlines the features implemented in Minish and the future goals f
 
 ### Core Generators
 
-- [x] Integer generators (`int`, `intRange`)
-- [x] Float generators (`float`, `floatRange`)
+- [x] Integer generators (`int` and `intRange`)
+- [x] Float generators (`float` and `floatRange`)
 - [x] Boolean generator
-- [x] Character generators (`char`, `charFrom`)
+- [x] Character generators (`char` and `charFrom`)
 - [x] Constant generator
 - [x] Enum generator
 
 ### Collection Generators
 
 - [x] String generator with charset options
-- [x] List generator with min/max length
+- [x] List generator with min and max length
 - [x] Array generator (fixed-size)
 - [x] Optional generator
 - [x] HashMap generator
-- [x] Non-empty wrappers (`nonEmptyList`, `nonEmptyString`)
+- [x] Non-empty wrappers (`nonEmptyList` and `nonEmptyString`)
 
 ### Special Generators
 
-- [x] Tuple generators (`tuple2`, `tuple3`)
+- [x] Tuple generators (`tuple2` and `tuple3`)
 - [x] Struct generator
 - [x] UUID generator (v4)
 - [x] Timestamp generator
@@ -44,7 +44,7 @@ This document outlines the features implemented in Minish and the future goals f
 
 - [x] Integer shrinking (towards zero)
 - [x] Float shrinking (towards zero)
-- [x] List/string shrinking (multi-phase removal)
+- [x] List and string shrinking (multiphase removal)
 - [x] Tuple shrinking (element-wise)
 - [x] Array shrinking (element-wise)
 - [x] Optional shrinking (try null first)
@@ -64,15 +64,15 @@ This document outlines the features implemented in Minish and the future goals f
 ### Documentation
 
 - [x] README with examples
-- [x] API reference
-- [x] Shrinking guide
 - [x] Example files (in `examples/` directory)
-- [ ] Zig package documentation comments
+- [x] Module-level docstrings (lib, gen, shrink, combinators, runner, core)
+- [x] Function-level docstrings for public API
+- [x] Generated API docs via `zig build docs`
 - [ ] Tutorial guide
 
 ### Future Goals
 
-- [ ] Stateful testing (state machine / model-based)
+- [ ] Stateful testing (using state machine or model-based)
 - [ ] Command sequence generation
 - [ ] Test database for reproducibility
 - [ ] Integration with Zig's test framework
