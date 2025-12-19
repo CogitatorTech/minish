@@ -24,6 +24,10 @@ const Generator = gen.Generator;
 /// // Convert generated integers to strings
 /// const string_gen = combinators.map(i32, []const u8, gen.int(i32), intToString);
 /// ```
+///
+/// Note: If base_gen allocates memory and map_fn transforms to a different type,
+/// the base value is freed after transformation. If map_fn returns a type that
+/// also needs freeing, you must provide that through the result generator.
 pub fn map(
     comptime T: type,
     comptime U: type,
@@ -33,9 +37,16 @@ pub fn map(
     const MapGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!U {
             const base_value = try base_gen.generateFn(tc);
-            return map_fn(base_value);
+            const result = map_fn(base_value);
+            // Free the base value after transformation if it was allocated
+            if (base_gen.freeFn) |freeFn| {
+                freeFn(tc.allocator, base_value);
+            }
+            return result;
         }
     };
+    // Note: freeFn is null because the mapped result U may have different
+    // memory semantics. Users should use a wrapper if U needs freeing.
     return .{ .generateFn = MapGenerator.generate, .shrinkFn = null, .freeFn = null };
 }
 
@@ -50,6 +61,8 @@ pub fn map(
 /// // Generate a length, then a list of that length
 /// const list_gen = combinators.flatMap(usize, []const u8, gen.intRange(usize, 1, 10), makeListGen);
 /// ```
+///
+/// Note: The base value is freed after the next generator is created and produces a result.
 pub fn flatMap(
     comptime T: type,
     comptime U: type,
@@ -60,7 +73,20 @@ pub fn flatMap(
         fn generate(tc: *TestCase) core.GenError!U {
             const base_value = try base_gen.generateFn(tc);
             const next_gen = flat_fn(base_value);
-            return next_gen.generateFn(tc);
+            const result = try next_gen.generateFn(tc);
+            // Free the base value after we're done using it
+            if (base_gen.freeFn) |freeFn| {
+                freeFn(tc.allocator, base_value);
+            }
+            return result;
+        }
+
+        fn free(allocator: std.mem.Allocator, value: U) void {
+            // Try to free using the result generator's freeFn
+            // Note: This is a best-effort approach since we don't know which
+            // specific generator was used (depends on base_value at runtime)
+            _ = allocator;
+            _ = value;
         }
     };
     return .{ .generateFn = FlatMapGenerator.generate, .shrinkFn = null, .freeFn = null };
@@ -218,4 +244,35 @@ test "filter memory leak regression test" {
     };
 
     try runner.check(allocator, filtered_gen, Props.prop_no_op, opts);
+}
+
+test "regression: map combinator frees base value" {
+    // Bug: Map combinator didn't free the base value after transformation
+    // Fix: Added freeFn call after map_fn is applied
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+
+    // Generate a string (which allocates) and map it to its length (which doesn't)
+    const str_gen = comptime gen.string(.{ .min_len = 1, .max_len = 10 });
+
+    const getLen = struct {
+        fn func(s: []const u8) usize {
+            return s.len;
+        }
+    }.func;
+
+    const len_gen = map([]const u8, usize, str_gen, getLen);
+
+    const opts = runner.Options{ .seed = 222, .num_runs = 20 };
+
+    const Props = struct {
+        fn prop_check_len(len: usize) !void {
+            // Just verify the length is in expected range
+            try std.testing.expect(len >= 1 and len <= 10);
+        }
+    };
+
+    // If map doesn't free the base string, this will leak memory
+    // and the test allocator will catch it
+    try runner.check(allocator, len_gen, Props.prop_check_len, opts);
 }

@@ -172,6 +172,9 @@ pub fn char() Generator(u8) {
 
 /// Generate a single character from a specific character set.
 pub fn charFrom(comptime charset: []const u8) Generator(u8) {
+    comptime {
+        if (charset.len == 0) @compileError("charFrom requires a non-empty charset");
+    }
     const CharFromGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!u8 {
             const idx = try tc.choice(charset.len - 1);
@@ -347,6 +350,11 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
             const len = config.min_len + try tc.choice(config.max_len - config.min_len);
             const chars = config.charset.getChars(config.custom_chars);
 
+            // Guard against empty charset
+            if (chars.len == 0) {
+                return error.InvalidChoice;
+            }
+
             var result = std.ArrayList(u8).empty;
             errdefer result.deinit(tc.allocator);
 
@@ -380,6 +388,9 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 /// Memory lifecycle: The returned slice and its elements (if allocated) are owned by
 /// the Minish runner and will be freed automatically after the test property returns.
 pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_len: usize, comptime max_len: usize) Generator([]const T) {
+    comptime {
+        if (max_len < min_len) @compileError("list generator: max_len must be >= min_len");
+    }
     const ListGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![]const T {
             const len = min_len + try tc.choice(max_len - min_len);
@@ -932,4 +943,28 @@ test "memory leak regression tests (generators)" {
     // Test Structure
     const struct_gen = structure(S, .{ .x = str_gen, .y = str_gen });
     try runner.check(allocator, struct_gen, Props.prop_no_op_struct, opts);
+}
+
+// ============================================================================
+// Regression Tests for Bug Fixes
+// ============================================================================
+
+test "regression: string generator with empty custom charset returns error" {
+    // Bug: Empty charset would cause underflow in tc.choice(chars.len - 1)
+    // Fix: Added guard to return InvalidChoice for empty charset
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Create a generator with empty custom charset
+    const empty_charset_gen = string(.{
+        .min_len = 1,
+        .max_len = 5,
+        .charset = .custom,
+        .custom_chars = "",
+    });
+
+    // Should return InvalidChoice error, not crash
+    const result = empty_charset_gen.generateFn(&tc);
+    try testing.expectError(core.GenError.InvalidChoice, result);
 }

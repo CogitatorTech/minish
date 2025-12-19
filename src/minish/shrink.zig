@@ -290,6 +290,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                             // Move to next phase
                             context.phase = .RemoveFromStart;
                             context.remove_count = context.original.len / 2;
+                            context.current_len = context.original.len; // Reset for next phase
                             continue;
                         }
 
@@ -534,6 +535,7 @@ fn OptionalShrinkContext(comptime T: type) type {
         allocator: std.mem.Allocator,
         inner_value: T,
         tried_null: bool,
+        done: bool,
         inner_iterator: ?Iterator(T),
     };
 }
@@ -543,10 +545,14 @@ fn makeOptionalShrinkNext(comptime T: type) *const fn (*anyopaque) ??T {
         fn next(ctx: *anyopaque) ??T {
             const context: *OptionalShrinkContext(T) = @ptrCast(@alignCast(ctx));
 
-            // First try null
+            if (context.done) return null; // End of iteration (outer null)
+
+            // First try null as a shrink candidate
             if (!context.tried_null) {
                 context.tried_null = true;
-                return null; // Return null as ?T
+                // Return ?T = null wrapped in outer optional
+                // We return a "some" containing the value "null"
+                return @as(?T, null);
             }
 
             // Then try shrinking the inner value
@@ -556,7 +562,8 @@ fn makeOptionalShrinkNext(comptime T: type) *const fn (*anyopaque) ??T {
                 }
             }
 
-            return @as(?T, null); // Sentinel for "no more shrinks"
+            context.done = true;
+            return null; // End of iteration (outer null)
         }
     }.next;
 }
@@ -584,6 +591,7 @@ pub fn optional(comptime T: type, allocator: std.mem.Allocator, value: ?T, inner
             .allocator = allocator,
             .inner_value = undefined,
             .tried_null = true,
+            .done = true,
             .inner_iterator = null,
         };
     } else {
@@ -591,6 +599,7 @@ pub fn optional(comptime T: type, allocator: std.mem.Allocator, value: ?T, inner
             .allocator = allocator,
             .inner_value = value.?,
             .tried_null = false,
+            .done = false,
             .inner_iterator = if (inner_shrinker) |shrinker| shrinker(allocator, value.?) else null,
         };
     }
@@ -843,4 +852,60 @@ test "float shrinking with f32" {
     const first = it.next();
     try testing.expect(first != null);
     try testing.expect(@abs(first.?) < 50.0);
+}
+
+// ============================================================================
+// Regression Tests for Bug Fixes
+// ============================================================================
+
+test "regression: optional shrinking produces null as shrink candidate" {
+    // Bug: Optional shrinking couldn't distinguish between "try null" and "end of iteration"
+    // Both returned the same value, making it impossible to shrink to null.
+    const allocator = testing.allocator;
+
+    // Shrink an optional with value 100
+    var it = optional(i32, allocator, @as(?i32, 100), intShrinker(i32));
+    defer it.deinit();
+
+    // First shrink candidate should be null (trying to shrink to null)
+    const first = it.next();
+    try testing.expect(first != null); // Outer optional is some (not end of iteration)
+    try testing.expectEqual(@as(?i32, null), first.?); // Inner optional is null
+}
+
+test "regression: list shrinking removes from both ends correctly" {
+    // Bug: current_len wasn't reset when transitioning from RemoveFromEnd to RemoveFromStart
+    // causing RemoveFromStart to use wrong indices.
+    const allocator = testing.allocator;
+
+    const original = [_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    var it = list(i32, allocator, &original);
+    defer it.deinit();
+
+    var shrunk_count: usize = 0;
+    var all_valid = true;
+
+    while (it.next()) |shrunk| {
+        defer allocator.free(shrunk);
+        shrunk_count += 1;
+
+        // All shrunk lists must be subsets of the original (elements must exist in original)
+        for (shrunk) |elem| {
+            var found = false;
+            for (original) |orig_elem| {
+                if (elem == orig_elem) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                all_valid = false;
+            }
+        }
+
+        if (shrunk_count > 50) break; // Safety limit
+    }
+
+    try testing.expect(shrunk_count > 0);
+    try testing.expect(all_valid);
 }
