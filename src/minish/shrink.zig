@@ -909,3 +909,45 @@ test "regression: list shrinking removes from both ends correctly" {
     try testing.expect(shrunk_count > 0);
     try testing.expect(all_valid);
 }
+
+test "array shrinking produces smaller element values" {
+    const allocator = testing.allocator;
+
+    const original = [_]i32{ 100, 200, 300 };
+    var it = array(i32, 3, allocator, original, intShrinker(i32));
+    defer it.deinit();
+
+    var count: usize = 0;
+    while (it.next()) |shrunk| {
+        count += 1;
+        // At least one element should be smaller
+        var any_smaller = false;
+        for (0..3) |i| {
+            if (@abs(shrunk[i]) < @abs(original[i])) {
+                any_smaller = true;
+            }
+        }
+        try testing.expect(any_smaller);
+        if (count > 20) break;
+    }
+    try testing.expect(count > 0);
+}
+
+test "tuple2 shrinking produces smaller values" {
+    const allocator = testing.allocator;
+
+    const original: struct { i32, i32 } = .{ 100, 200 };
+    var it = tuple2(i32, i32, allocator, original, intShrinker(i32), intShrinker(i32));
+    defer it.deinit();
+
+    var count: usize = 0;
+    while (it.next()) |shrunk| {
+        count += 1;
+        // At least one element should be smaller
+        const smaller_first = @abs(shrunk[0]) < @abs(original[0]);
+        const smaller_second = @abs(shrunk[1]) < @abs(original[1]);
+        try testing.expect(smaller_first or smaller_second);
+        if (count > 20) break;
+    }
+    try testing.expect(count > 0);
+}

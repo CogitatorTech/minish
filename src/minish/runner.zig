@@ -44,8 +44,10 @@ pub fn check(
     test_fn: anytype,
     options: Options,
 ) !void {
-    // Cast the i64 timestamp to u64 to match the seed type.
-    const seed = options.seed orelse @as(u64, @intCast(std.time.milliTimestamp()));
+    // Handle seed: use provided seed or current timestamp.
+    // Use @abs to handle negative timestamps (before 1970) safely.
+    const timestamp = std.time.milliTimestamp();
+    const seed = options.seed orelse (if (timestamp >= 0) @as(u64, @intCast(timestamp)) else 0);
     var prng = std.Random.DefaultPrng.init(seed);
 
     if (options.verbose) {
@@ -132,4 +134,145 @@ pub fn check(
         };
     }
     std.debug.print("OK. {d} tests passed.\n", .{options.num_runs});
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+const testing = std.testing;
+
+test "runner: zero runs completes immediately" {
+    const allocator = testing.allocator;
+    const int_gen = gen.int(i32);
+
+    const alwaysFail = struct {
+        fn prop(_: i32) !void {
+            return error.ShouldNotRun;
+        }
+    }.prop;
+
+    // With num_runs = 0, the property should never be called
+    try check(allocator, int_gen, alwaysFail, .{
+        .num_runs = 0,
+        .seed = 12345,
+    });
+}
+
+test "runner: passing property completes successfully" {
+    const allocator = testing.allocator;
+    const int_gen = gen.intRange(i32, 0, 100);
+
+    const alwaysPass = struct {
+        fn prop(x: i32) !void {
+            // This always passes
+            try testing.expect(x >= 0);
+        }
+    }.prop;
+
+    try check(allocator, int_gen, alwaysPass, .{
+        .num_runs = 10,
+        .seed = 12345,
+    });
+}
+
+test "runner: failing property returns error" {
+    const allocator = testing.allocator;
+    const int_gen = gen.intRange(i32, 10, 100);
+
+    const alwaysFail = struct {
+        fn prop(_: i32) !void {
+            return error.PropertyFailed;
+        }
+    }.prop;
+
+    const result = check(allocator, int_gen, alwaysFail, .{
+        .num_runs = 10,
+        .seed = 12345,
+    });
+
+    try testing.expectError(error.PropertyFailed, result);
+}
+
+test "runner: generator error propagates" {
+    const allocator = testing.allocator;
+
+    // Create a generator that always fails
+    const FailingGenerator = struct {
+        fn generate(_: *TestCase) core.GenError!i32 {
+            return error.InvalidChoice;
+        }
+    };
+
+    const failing_gen = gen.Generator(i32){
+        .generateFn = FailingGenerator.generate,
+        .shrinkFn = null,
+        .freeFn = null,
+    };
+
+    const anyProp = struct {
+        fn prop(_: i32) !void {}
+    }.prop;
+
+    const result = check(allocator, failing_gen, anyProp, .{
+        .num_runs = 10,
+        .seed = 12345,
+    });
+
+    try testing.expectError(core.GenError.InvalidChoice, result);
+}
+
+test "runner: seed produces reproducible results" {
+    const allocator = testing.allocator;
+    const int_gen = gen.int(i32);
+
+    var values1 = std.ArrayList(i32).empty;
+    defer values1.deinit(allocator);
+    var values2 = std.ArrayList(i32).empty;
+    defer values2.deinit(allocator);
+
+    const collectValues1 = struct {
+        var list: *std.ArrayList(i32) = undefined;
+        var alloc: std.mem.Allocator = undefined;
+        fn prop(x: i32) !void {
+            try list.append(alloc, x);
+        }
+    };
+    collectValues1.list = &values1;
+    collectValues1.alloc = allocator;
+
+    const collectValues2 = struct {
+        var list: *std.ArrayList(i32) = undefined;
+        var alloc: std.mem.Allocator = undefined;
+        fn prop(x: i32) !void {
+            try list.append(alloc, x);
+        }
+    };
+    collectValues2.list = &values2;
+    collectValues2.alloc = allocator;
+
+    // Run with same seed twice
+    try check(allocator, int_gen, collectValues1.prop, .{ .num_runs = 5, .seed = 99999 });
+    try check(allocator, int_gen, collectValues2.prop, .{ .num_runs = 5, .seed = 99999 });
+
+    // Should produce identical sequences
+    try testing.expectEqualSlices(i32, values1.items, values2.items);
+}
+
+test "runner: memory management with allocated values" {
+    const allocator = testing.allocator;
+    const str_gen = gen.string(.{ .min_len = 1, .max_len = 10 });
+
+    const checkString = struct {
+        fn prop(s: []const u8) !void {
+            // Just verify the string is valid
+            try testing.expect(s.len >= 1 and s.len <= 10);
+        }
+    }.prop;
+
+    // If memory isn't properly managed, this will leak and test allocator will catch it
+    try check(allocator, str_gen, checkString, .{
+        .num_runs = 20,
+        .seed = 12345,
+    });
 }

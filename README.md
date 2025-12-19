@@ -38,7 +38,7 @@ following steps:
 2. Finding cases where the input causes the property to fail.
 3. Finding smaller subsets of the failing input that still cause the failure (this is called "shrinking").
 
-For example, consider the property of a `reverse(s: []const u8)` function that states that reversing
+For example, consider the property of a `reverse` function that states that reversing
 a string twice should return the original string.
 In property-based testing, you would define this property and let the framework generate a lot of random strings to
 test it.
@@ -111,6 +111,15 @@ Finally, you can `@import("minish")` and start using it in your Zig project.
 const std = @import("std");
 const minish = @import("minish");
 const gen = minish.gen;
+
+// Helper function to reverse a string
+fn reverse(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    const result = try allocator.alloc(u8, s.len);
+    for (s, 0..) |c, i| {
+        result[s.len - 1 - i] = c;
+    }
+    return result;
+}
 
 // Property: reversing a string twice returns the original
 fn reverse_twice_is_identity(s: []const u8) !void {

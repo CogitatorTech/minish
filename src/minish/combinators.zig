@@ -276,3 +276,35 @@ test "regression: map combinator frees base value" {
     // and the test allocator will catch it
     try runner.check(allocator, len_gen, Props.prop_check_len, opts);
 }
+
+test "flatMap combinator chains generators" {
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+
+    // Generate a number, then use it to determine which generator to use
+    const makeGen = struct {
+        fn make(x: i32) gen.Generator(i32) {
+            // If x is even, return 0; if odd, return 1
+            if (@mod(x, 2) == 0) {
+                return gen.constant(@as(i32, 0));
+            } else {
+                return gen.constant(@as(i32, 1));
+            }
+        }
+    }.make;
+
+    const flat_gen = flatMap(i32, i32, gen.intRange(i32, 0, 10), makeGen);
+
+    const Props = struct {
+        fn prop(x: i32) !void {
+            // Result should be either 0 or 1
+            try std.testing.expect(x == 0 or x == 1);
+        }
+    };
+
+    try runner.check(allocator, flat_gen, Props.prop, .{ .seed = 333, .num_runs = 20 });
+}
+
+// Note: sized combinator not tested because it requires generators that take
+// runtime size parameters, but most generators use comptime parameters.
+// It's primarily for custom use cases.
