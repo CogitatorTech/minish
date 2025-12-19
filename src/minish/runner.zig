@@ -26,7 +26,7 @@ pub const Options = struct {
     verbose: bool = false,
 };
 
-/// Run property-based tests with the given generator and property function.
+/// Run the tests with the given generator and property function.
 ///
 /// Execution details:
 /// - Runs the test `options.num_runs` times (default 100).

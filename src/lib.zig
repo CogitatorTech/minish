@@ -49,7 +49,7 @@ pub const TestCase = @import("minish/core.zig").TestCase;
 /// Errors that can occur during generation.
 pub const GenError = @import("minish/core.zig").GenError;
 
-/// Run property-based tests with the given generator and property function.
+/// Run the tests with the given generator and property function.
 pub const check = @import("minish/runner.zig").check;
 
 /// Configuration options for property tests.
