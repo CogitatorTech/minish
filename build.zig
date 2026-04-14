@@ -12,11 +12,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // Unit tests
-    const tests = b.addExecutable(.{
-        .name = "minish-tests",
-        .root_module = minish_mod,
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
     });
-    tests.kind = .@"test";
+    const tests = b.addTest(.{
+        .root_module = test_mod,
+    });
 
     const run_tests = b.addRunArtifact(tests);
     b.step("test", "Run unit tests").dependOn(&run_tests.step);
@@ -25,8 +28,7 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate API documentation");
     const doc_path = "docs/api";
 
-    // Create docs directory if it doesn't exist
-    std.fs.cwd().makePath("docs") catch {};
+    const io = b.graph.io;
 
     const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
         b.graph.zig_exe,
@@ -38,12 +40,13 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&gen_docs_cmd.step);
 
     // Examples (only when developing minish itself, not when used as a dependency)
-    if (std.fs.cwd().openDir("examples", .{ .iterate = true })) |examples_dir| {
+    if (b.build_root.handle.openDir(io, "examples", .{ .iterate = true })) |examples_dir| {
         var dir = examples_dir;
+        defer dir.close(io);
         const run_all_step = b.step("run-all", "Run all examples");
 
         var it = dir.iterate();
-        while (it.next() catch null) |entry| {
+        while (it.next(io) catch null) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
 

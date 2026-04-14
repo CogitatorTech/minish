@@ -4,7 +4,7 @@ const gen = minish.gen;
 
 // Property: sorting a list twice gives the same result as sorting once
 fn sort_is_idempotent(list: []const i32) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -25,7 +25,7 @@ fn sort_is_idempotent(list: []const i32) !void {
 fn sorted_list_is_ordered(list: []const i32) !void {
     if (list.len <= 1) return;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -43,7 +43,7 @@ fn sorted_list_is_ordered(list: []const i32) !void {
 
 // Property: sorted list should have the same length as original
 fn sort_preserves_length(list: []const i32) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -56,7 +56,7 @@ fn sort_preserves_length(list: []const i32) !void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

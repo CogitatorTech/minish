@@ -18,7 +18,7 @@
 //! }
 //!
 //! pub fn main() !void {
-//!     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//!     var gpa: std.heap.DebugAllocator(.{}) = .init;
 //!     defer _ = gpa.deinit();
 //!
 //!     try minish.check(gpa.allocator(), gen.int(i32), my_property, .{
@@ -58,6 +58,10 @@ pub const Options = @import("minish/runner.zig").Options;
 
 // Backwards compatibility alias
 pub const run = check;
+
+test {
+    std.testing.refAllDecls(@This());
+}
 
 test "Public API Sanity Check" {
     // Check modules are accessible and are struct types (namespaces)

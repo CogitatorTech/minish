@@ -14,7 +14,7 @@ fn reverse(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
 
 // Property: reversing a string twice should give the original string
 fn reverse_twice_is_identity(str: []const u8) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -28,7 +28,7 @@ fn reverse_twice_is_identity(str: []const u8) !void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
