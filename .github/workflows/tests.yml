@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - develop
     tags:
       - 'v*'
   pull_request:
