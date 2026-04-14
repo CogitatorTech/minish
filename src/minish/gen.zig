@@ -56,7 +56,7 @@ fn generate_int(comptime T: type) fn (tc: *TestCase) core.GenError!T {
             } else {
                 // For signed integers, generate across unsigned range and bitcast
                 // This correctly covers the full range including minInt
-                const UnsignedT = @Type(.{ .int = .{ .bits = IntType.bits, .signedness = .unsigned } });
+                const UnsignedT = std.meta.Int(.unsigned, IntType.bits);
                 const max_unsigned = std.math.maxInt(UnsignedT);
                 const val = try tc.choice(max_unsigned);
                 return @bitCast(@as(UnsignedT, @intCast(val)));

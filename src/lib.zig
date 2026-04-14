@@ -59,6 +59,10 @@ pub const Options = @import("minish/runner.zig").Options;
 // Backwards compatibility alias
 pub const run = check;
 
+test {
+    std.testing.refAllDecls(@This());
+}
+
 test "Public API Sanity Check" {
     // Check modules are accessible and are struct types (namespaces)
     try std.testing.expect(@typeInfo(gen) == .@"struct");
