@@ -44,10 +44,12 @@ pub fn check(
     test_fn: anytype,
     options: Options,
 ) !void {
-    // Handle seed: use provided seed or current timestamp.
-    // Use @abs to handle negative timestamps (before 1970) safely.
-    const timestamp = std.time.milliTimestamp();
-    const seed = options.seed orelse (if (timestamp >= 0) @as(u64, @intCast(timestamp)) else 0);
+    // Handle seed: use provided seed or a random value from the OS.
+    const seed = options.seed orelse blk: {
+        var seed_buf: [8]u8 = undefined;
+        const rc = std.os.linux.getrandom(&seed_buf, 8, 0);
+        break :blk if (rc == 8) std.mem.readInt(u64, &seed_buf, .little) else 0;
+    };
     var prng = std.Random.DefaultPrng.init(seed);
 
     if (options.verbose) {
