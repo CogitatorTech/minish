@@ -30,7 +30,6 @@ pub fn build(b: *std.Build) void {
 
     const io = b.graph.io;
 
-    const mkdir_cmd = b.addSystemCommand(&[_][]const u8{ "mkdir", "-p", "docs" });
     const gen_docs_cmd = b.addSystemCommand(&[_][]const u8{
         b.graph.zig_exe,
         "build-lib",
@@ -38,7 +37,6 @@ pub fn build(b: *std.Build) void {
         "-femit-docs=" ++ doc_path,
         "-fno-emit-bin",
     });
-    gen_docs_cmd.step.dependOn(&mkdir_cmd.step);
     docs_step.dependOn(&gen_docs_cmd.step);
 
     // Examples (only when developing minish itself, not when used as a dependency)
