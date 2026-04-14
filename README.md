@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/CogitatorTech/minish/blob/main/LICENSE)
 [![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/CogitatorTech/minish/tree/main/examples)
 [![Docs](https://img.shields.io/badge/docs-read-blue?style=flat&labelColor=282c34&logo=read-the-docs)](https://CogitatorTech.github.io/minish/)
-[![Zig Version](https://img.shields.io/badge/Zig-0.15.2-orange?logo=zig&labelColor=282c34)](https://ziglang.org/download/)
+[![Zig Version](https://img.shields.io/badge/Zig-0.16.0-orange?logo=zig&labelColor=282c34)](https://ziglang.org/download/)
 [![Release](https://img.shields.io/github/release/CogitatorTech/minish.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/CogitatorTech/minish/releases/latest)
 
 A property-based testing framework for Zig
@@ -87,7 +87,7 @@ Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (f
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
 > [!NOTE]
-> Minsih is developed and tested with Zig version 0.15.2.
+> Minish is developed and tested with Zig version 0.16.0.
 
 #### Adding to Build Script
 
@@ -123,7 +123,7 @@ fn reverse(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
 
 // Property: reversing a string twice returns the original
 fn reverse_twice_is_identity(s: []const u8) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -137,7 +137,7 @@ fn reverse_twice_is_identity(s: []const u8) !void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
