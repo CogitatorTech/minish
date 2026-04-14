@@ -1160,3 +1160,49 @@ test "dependent generator creates related values" {
         try testing.expectEqual(@as(i32, 0), value[1]);
     }
 }
+
+test "regression: signed int generator uses std.meta.Int correctly" {
+    // Regression: @Type(.{ .int = ... }) was replaced with std.meta.Int(.unsigned, bits)
+    // in Zig 0.16.0. Verify signed integers still generate across the full range.
+    const allocator = testing.allocator;
+
+    // i8 range: -128 to 127
+    {
+        var tc = TestCase.init(allocator, 99);
+        defer tc.deinit();
+        const gen_i8 = generate_int(i8);
+
+        var saw_negative = false;
+        var saw_positive = false;
+        for (0..50) |_| {
+            const val = try gen_i8(&tc);
+            if (val < 0) saw_negative = true;
+            if (val > 0) saw_positive = true;
+        }
+        try testing.expect(saw_negative);
+        try testing.expect(saw_positive);
+    }
+
+    // i16 range: -32768 to 32767
+    {
+        var tc = TestCase.init(allocator, 42);
+        defer tc.deinit();
+        const gen_i16 = generate_int(i16);
+
+        var saw_negative = false;
+        for (0..50) |_| {
+            const val = try gen_i16(&tc);
+            if (val < 0) saw_negative = true;
+        }
+        try testing.expect(saw_negative);
+    }
+
+    // u8 should still work (unsigned path unchanged)
+    {
+        var tc = TestCase.init(allocator, 12345);
+        defer tc.deinit();
+        const gen_u8 = generate_int(u8);
+        const val = try gen_u8(&tc);
+        try testing.expect(val <= 255);
+    }
+}

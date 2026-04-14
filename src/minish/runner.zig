@@ -18,7 +18,7 @@ const TestCase = core.TestCase;
 pub const Options = struct {
     /// Number of test runs to execute.
     num_runs: u32 = 100,
-    /// Optional seed for reproducibility. If null, uses current timestamp.
+    /// Optional seed for reproducibility. If null, derives one from ASLR entropy.
     seed: ?u64 = null,
     /// Maximum number of shrink attempts before stopping.
     max_shrink_attempts: u32 = 1000,
@@ -45,9 +45,11 @@ pub fn check(
     options: Options,
 ) !void {
     // Handle seed: use provided seed or derive one from a stack address.
+    // ASLR ensures the stack address differs between runs, providing non-determinism.
     const seed = options.seed orelse blk: {
-        var entropy: usize = undefined;
-        break :blk @as(u64, @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&@intFromPtr(&entropy)))));
+        var anchor: u8 = 0;
+        const addr = @intFromPtr(&anchor);
+        break :blk @as(u64, @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&addr))));
     };
     var prng = std.Random.DefaultPrng.init(seed);
 
@@ -276,4 +278,72 @@ test "runner: memory management with allocated values" {
         .num_runs = 20,
         .seed = 12345,
     });
+}
+
+test "regression: signed integer generation covers full range (std.meta.Int)" {
+    // Regression: @Type(.{ .int = ... }) was replaced with std.meta.Int in 0.16.0.
+    // Verify signed integer generation still works correctly.
+    const allocator = testing.allocator;
+    const i8_gen = gen.int(i8);
+
+    var saw_negative = false;
+    var saw_positive = false;
+
+    const checkRange = struct {
+        var neg_ptr: *bool = undefined;
+        var pos_ptr: *bool = undefined;
+        fn prop(x: i8) !void {
+            if (x < 0) neg_ptr.* = true;
+            if (x > 0) pos_ptr.* = true;
+        }
+    };
+    checkRange.neg_ptr = &saw_negative;
+    checkRange.pos_ptr = &saw_positive;
+
+    try check(allocator, i8_gen, checkRange.prop, .{
+        .num_runs = 100,
+        .seed = 42,
+    });
+
+    // With 100 runs over the full i8 range, we should see both signs
+    try testing.expect(saw_negative);
+    try testing.expect(saw_positive);
+}
+
+test "regression: auto seed produces deterministic run with fixed seed" {
+    // Verify that the Wyhash-based seed generation doesn't break
+    // the fixed-seed reproducibility guarantee.
+    const allocator = testing.allocator;
+    const int_gen = gen.int(u16);
+
+    var values1 = std.ArrayList(u16).empty;
+    defer values1.deinit(allocator);
+    var values2 = std.ArrayList(u16).empty;
+    defer values2.deinit(allocator);
+
+    const collect1 = struct {
+        var list: *std.ArrayList(u16) = undefined;
+        var alloc: std.mem.Allocator = undefined;
+        fn prop(x: u16) !void {
+            try list.append(alloc, x);
+        }
+    };
+    collect1.list = &values1;
+    collect1.alloc = allocator;
+
+    const collect2 = struct {
+        var list: *std.ArrayList(u16) = undefined;
+        var alloc: std.mem.Allocator = undefined;
+        fn prop(x: u16) !void {
+            try list.append(alloc, x);
+        }
+    };
+    collect2.list = &values2;
+    collect2.alloc = allocator;
+
+    // Same fixed seed = same sequence
+    try check(allocator, int_gen, collect1.prop, .{ .num_runs = 10, .seed = 77777 });
+    try check(allocator, int_gen, collect2.prop, .{ .num_runs = 10, .seed = 77777 });
+
+    try testing.expectEqualSlices(u16, values1.items, values2.items);
 }

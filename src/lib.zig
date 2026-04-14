@@ -18,7 +18,7 @@
 //! }
 //!
 //! pub fn main() !void {
-//!     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//!     var gpa: std.heap.DebugAllocator(.{}) = .init;
 //!     defer _ = gpa.deinit();
 //!
 //!     try minish.check(gpa.allocator(), gen.int(i32), my_property, .{
