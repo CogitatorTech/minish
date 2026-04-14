@@ -44,11 +44,10 @@ pub fn check(
     test_fn: anytype,
     options: Options,
 ) !void {
-    // Handle seed: use provided seed or a random value from the OS.
+    // Handle seed: use provided seed or derive one from a stack address.
     const seed = options.seed orelse blk: {
-        var seed_buf: [8]u8 = undefined;
-        const rc = std.os.linux.getrandom(&seed_buf, 8, 0);
-        break :blk if (rc == 8) std.mem.readInt(u64, &seed_buf, .little) else 0;
+        var entropy: usize = undefined;
+        break :blk @as(u64, @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&@intFromPtr(&entropy)))));
     };
     var prng = std.Random.DefaultPrng.init(seed);
 
