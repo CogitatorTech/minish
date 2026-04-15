@@ -86,8 +86,14 @@ zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch
 Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.1.0`.
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
-> [!NOTE]
-> Minish is developed and tested with Zig version 0.16.0.
+Zig version supported by each tagged release:
+
+| Zig      | Minish Tags        |
+|----------|--------------------|
+| `0.16.0` | `v0.2.x`, `v0.3.x` |
+| `0.15.2` | `v0.1.x`           |
+
+The `main` branch tracks the latest Zig release (currently `0.16.0`).
 
 #### Adding to Build Script
 
