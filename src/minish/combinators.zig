@@ -1,10 +1,13 @@
 //! Generator combinators for composing and transforming generators.
 //!
-//! Combinators allow you to build complex generators from simpler ones:
-//! - `map`: Transform generated values
-//! - `flatMap`: Chain generators together
-//! - `filter`: Filter generated values by predicate
+//! Combinators build generators from simpler ones:
+//! - `map`: Transform generated values with a function
+//! - `flatMap`: Chain generators, where the next generator depends on the first value
+//! - `filter`: Keep generated values that satisfy a predicate
+//! - `sized`: Apply a size parameter to a generator factory
 //! - `frequency`: Weighted random choice between generators
+//! - `oneOf`: Uniform random choice between generators
+//! - `dependent`: Pair a first value with a generator derived from it
 
 const std = @import("std");
 const core = @import("core.zig");
@@ -197,8 +200,90 @@ pub fn frequency(
     return .{ .generateFn = FrequencyGenerator.generate, .shrinkFn = null, .freeFn = FrequencyGenerator.free };
 }
 
-// Note: Combinator tests are demonstrated in examples/e5_struct_and_combinators.zig
-// They cannot be easily unit tested due to comptime parameter requirements
+// ============================================================================
+// OneOf Combinator
+// ============================================================================
+
+/// Choose one generator from a list with equal probability.
+///
+/// Example:
+/// ```zig
+/// const mixed_gen = combinators.oneOf(i32, &.{
+///     gen.intRange(i32, 0, 10),
+///     gen.constant(@as(i32, 100))
+/// });
+/// ```
+///
+/// Memory lifecycle: The returned value is owned by the Minish runner and will be freed automatically.
+/// Note: This assumes all generators share compatible memory management logic (e.g., typically same type).
+pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Generator(T) {
+    const OneOfGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!T {
+            if (generators.len == 0) return error.InvalidChoice;
+            const idx = try tc.choice(generators.len - 1);
+            return generators[idx].generateFn(tc);
+        }
+
+        fn free(allocator: std.mem.Allocator, value: T) void {
+            // We don't know which generator created it, so we can't easily free it recursively
+            // without storing which generator was used.
+            // However, for OneOf, we assume all generators produce the same type T.
+            // If T has a single canonical free strategy (e.g. it's a struct with known fields),
+            // we could try to free it.
+            // But if T implies different allocation strategies per variant, it's hard.
+            // BEST EFFORT: Use the freeFn of the first generator if available?
+            // Or iterate generators? No, that's wrong.
+
+            // Correct approach: OneOf should return a wrapper or we accept that strict heterogeneity
+            // isn't supported for managed types OR we require all generators to share a freeFn logic.
+            // For now, let's assume if the first generator has a freeFn, it works for all
+            // (often they are same type generators).
+            if (generators.len > 0 and generators[0].freeFn != null) {
+                generators[0].freeFn.?(allocator, value);
+            }
+        }
+    };
+    return .{ .generateFn = OneOfGenerator.generate, .shrinkFn = null, .freeFn = OneOfGenerator.free };
+}
+
+// ============================================================================
+// Dependent Combinator
+// ============================================================================
+
+/// Create a generator that depends on a previously generated value.
+/// Useful for generating related data where one field constrains another.
+pub fn dependent(
+    comptime T: type,
+    comptime U: type,
+    comptime first_gen: Generator(T),
+    comptime make_gen: fn (T) Generator(U),
+) Generator(struct { T, U }) {
+    const DependentGenerator = struct {
+        fn generate(tc: *TestCase) core.GenError!struct { T, U } {
+            const first_val = try first_gen.generateFn(tc);
+            const second_gen = make_gen(first_val);
+            const second_val = try second_gen.generateFn(tc);
+            return .{ first_val, second_val };
+        }
+
+        fn free(allocator: std.mem.Allocator, value: struct { T, U }) void {
+            if (first_gen.freeFn) |freeFn| {
+                freeFn(allocator, value[0]);
+            }
+            // For the dependent value, we need to regenerate the generator to access its freeFn.
+            // Ideally core.Generator would be uniform, but here make_gen is a function.
+            const second_gen = make_gen(value[0]);
+            if (second_gen.freeFn) |freeFn| {
+                freeFn(allocator, value[1]);
+            }
+        }
+    };
+    return .{ .generateFn = DependentGenerator.generate, .shrinkFn = null, .freeFn = DependentGenerator.free };
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
 
 test "combinator memory leak regression tests" {
     const runner = @import("runner.zig");
@@ -305,6 +390,64 @@ test "flatMap combinator chains generators" {
     try runner.check(allocator, flat_gen, Props.prop, .{ .seed = 333, .num_runs = 20 });
 }
 
-// Note: sized combinator not tested because it requires generators that take
-// runtime size parameters, but most generators use comptime parameters.
-// It's primarily for custom use cases.
+test "sized combinator delegates to the generator factory" {
+    const runner = @import("runner.zig");
+    const allocator = std.testing.allocator;
+
+    // A factory that ignores its size parameter and returns a constant generator.
+    // This verifies that `sized` invokes gen_fn and returns the resulting generator.
+    const makeGen = struct {
+        fn make(_: usize) gen.Generator(i32) {
+            return gen.constant(@as(i32, 7));
+        }
+    }.make;
+
+    const sized_gen = sized(i32, 5, makeGen);
+
+    const Props = struct {
+        fn prop(x: i32) !void {
+            try std.testing.expectEqual(@as(i32, 7), x);
+        }
+    };
+
+    try runner.check(allocator, sized_gen, Props.prop, .{ .seed = 444, .num_runs = 10 });
+}
+
+test "oneOf generator selects from alternatives" {
+    const allocator = std.testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    const gen_one = oneOf(i32, &.{
+        gen.intRange(i32, 0, 10),
+        gen.intRange(i32, 100, 110),
+    });
+
+    for (0..20) |_| {
+        const value = try gen_one.generateFn(&tc);
+        try std.testing.expect((value >= 0 and value <= 10) or (value >= 100 and value <= 110));
+    }
+}
+
+test "dependent generator creates related values" {
+    const allocator = std.testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Generate a bool, then based on it generate 0 or 100
+    const makeSecond = struct {
+        fn make(first: bool) Generator(i32) {
+            return if (first) gen.constant(@as(i32, 100)) else gen.constant(@as(i32, 0));
+        }
+    }.make;
+
+    const gen_dep = dependent(bool, i32, gen.boolean(), makeSecond);
+    const value = try gen_dep.generateFn(&tc);
+
+    // If first is true, second should be 100; if false, second should be 0
+    if (value[0]) {
+        try std.testing.expectEqual(@as(i32, 100), value[1]);
+    } else {
+        try std.testing.expectEqual(@as(i32, 0), value[1]);
+    }
+}

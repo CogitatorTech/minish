@@ -600,52 +600,6 @@ pub fn tuple() Generator(struct { i32, i32 }) {
 }
 
 // ============================================================================
-// Combinator: oneOf
-// ============================================================================
-
-/// Choose one generator from a list with equal probability.
-///
-/// Example:
-/// ```zig
-/// const mixed_gen = gen.oneOf(i32, &.{
-///     gen.intRange(i32, 0, 10),
-///     gen.constant(@as(i32, 100))
-/// });
-/// ```
-///
-/// Memory lifecycle: The returned value is owned by the Minish runner and will be freed automatically.
-/// Note: This assumes all generators share compatible memory management logic (e.g., typically same type).
-pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Generator(T) {
-    const OneOfGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!T {
-            if (generators.len == 0) return error.InvalidChoice;
-            const idx = try tc.choice(generators.len - 1);
-            return generators[idx].generateFn(tc);
-        }
-
-        fn free(allocator: std.mem.Allocator, value: T) void {
-            // We don't know which generator created it, so we can't easily free it recursively
-            // without storing which generator was used.
-            // However, for OneOf, we assume all generators produce the same type T.
-            // If T has a single canonical free strategy (e.g. it's a struct with known fields),
-            // we could try to free it.
-            // But if T implies different allocation strategies per variant, it's hard.
-            // BEST EFFORT: Use the freeFn of the first generator if available?
-            // Or iterate generators? No, that's wrong.
-
-            // Correct approach: OneOf should return a wrapper or we accept that strict heterogeneity
-            // isn't supported for managed types OR we require all generators to share a freeFn logic.
-            // For now, let's assume if the first generator has a freeFn, it works for all
-            // (often they are same type generators).
-            if (generators.len > 0 and generators[0].freeFn != null) {
-                generators[0].freeFn.?(allocator, value);
-            }
-        }
-    };
-    return .{ .generateFn = OneOfGenerator.generate, .shrinkFn = null, .freeFn = OneOfGenerator.free };
-}
-
-// ============================================================================
 // Struct Generator
 // ============================================================================
 
@@ -697,41 +651,6 @@ pub fn structure(
         }
     };
     return .{ .generateFn = StructGenerator.generate, .shrinkFn = null, .freeFn = StructGenerator.free };
-}
-
-// ============================================================================
-// Dependent Generator
-// ============================================================================
-
-/// Create a generator that depends on a previously generated value.
-/// Useful for generating related data where one field constrains another.
-pub fn dependent(
-    comptime T: type,
-    comptime U: type,
-    comptime first_gen: Generator(T),
-    comptime make_gen: fn (T) Generator(U),
-) Generator(struct { T, U }) {
-    const DependentGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!struct { T, U } {
-            const first_val = try first_gen.generateFn(tc);
-            const second_gen = make_gen(first_val);
-            const second_val = try second_gen.generateFn(tc);
-            return .{ first_val, second_val };
-        }
-
-        fn free(allocator: std.mem.Allocator, value: struct { T, U }) void {
-            if (first_gen.freeFn) |freeFn| {
-                freeFn(allocator, value[0]);
-            }
-            // For the dependent value, we need to regenerate the generator to access its freeFn.
-            // Ideally core.Generator would be uniform, but here make_gen is a function.
-            const second_gen = make_gen(value[0]);
-            if (second_gen.freeFn) |freeFn| {
-                freeFn(allocator, value[1]);
-            }
-        }
-    };
-    return .{ .generateFn = DependentGenerator.generate, .shrinkFn = null, .freeFn = DependentGenerator.free };
 }
 
 // ============================================================================
@@ -1120,45 +1039,6 @@ test "tuple3 generator produces valid tuples" {
     _ = value[0]; // i32
     _ = value[1]; // bool
     _ = value[2]; // u8
-}
-
-test "oneOf generator selects from alternatives" {
-    const allocator = testing.allocator;
-    var tc = TestCase.init(allocator, 12345);
-    defer tc.deinit();
-
-    const gen_one = oneOf(i32, &.{
-        intRange(i32, 0, 10),
-        intRange(i32, 100, 110),
-    });
-
-    for (0..20) |_| {
-        const value = try gen_one.generateFn(&tc);
-        try testing.expect((value >= 0 and value <= 10) or (value >= 100 and value <= 110));
-    }
-}
-
-test "dependent generator creates related values" {
-    const allocator = testing.allocator;
-    var tc = TestCase.init(allocator, 12345);
-    defer tc.deinit();
-
-    // Generate a bool, then based on it generate 0 or 100
-    const makeSecond = struct {
-        fn make(first: bool) Generator(i32) {
-            return if (first) constant(@as(i32, 100)) else constant(@as(i32, 0));
-        }
-    }.make;
-
-    const gen_dep = dependent(bool, i32, boolean(), makeSecond);
-    const value = try gen_dep.generateFn(&tc);
-
-    // If first is true, second should be 100; if false, second should be 0
-    if (value[0]) {
-        try testing.expectEqual(@as(i32, 100), value[1]);
-    } else {
-        try testing.expectEqual(@as(i32, 0), value[1]);
-    }
 }
 
 test "regression: signed int generator uses std.meta.Int correctly" {

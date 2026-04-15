@@ -31,7 +31,7 @@ Priorities, in order:
 - Avoid colorful adjectives and adverbs. Write "TCP proxy" not "lightweight TCP proxy", "scoring components" not "transparent scoring components".
 - Use noun phrases for checklist items, not imperative verbs. Write "redundant index detection" not "detect redundant indexes".
 - Headings in Markdown files must be in the title case: "Build from Source" not "Build from source". Minor words (a, an, the, and, but, or, for, in,
-  on, at, to, by, of) stay lowercase unless they are the first word.
+  on, at, to, by, of, is, are, was, were, be) stay lowercase unless they are the first word.
 
 ## Repository Layout
 
@@ -80,7 +80,7 @@ Please do not add dependencies without prior discussion.
 
 - Zig version: 0.16.0 (as declared in `build.zig.zon` and the Makefile's `ZIG_LOCAL` path).
 - Formatting is enforced by `zig fmt`. Run `make format` before committing.
-- Naming: `snake_case` for functions and variables, `PascalCase` for types and structs, `camelCase` is only acceptable when mirroring Zig standard-library conventions (e.g. `flatMap`, `oneOf`) already used in the public API.
+- Naming follows Zig standard-library conventions: `camelCase` for functions (e.g. `intRange`, `flatMap`, `oneOf`), `snake_case` for local variables and struct fields, `PascalCase` for types and structs, and `SCREAMING_SNAKE_CASE` for top-level compile-time constants.
 
 ## Required Validation
 
