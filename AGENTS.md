@@ -37,7 +37,8 @@ Priorities, in order:
 
 - `src/lib.zig`: Public API entry point. Re-exports `gen`, `combinators`, `check`, `Options`, `TestCase`, and `GenError`.
 - `src/minish/core.zig`: Core types (`TestCase`, `GenError`) shared by generators, combinators, and the runner.
-- `src/minish/gen.zig`: Built-in generators (integers, floats, booleans, characters, strings, lists, arrays, tuples, structs, optionals, hashmaps, UUIDs, timestamps, etc.).
+- `src/minish/gen.zig`: Built-in generators (integers, floats, booleans, characters, strings, lists, arrays, tuples, structs, optionals, hashmaps,
+  UUIDs, timestamps, etc.).
 - `src/minish/combinators.zig`: Generator combinators (`map`, `flatMap`, `filter`, `oneOf`, `frequency`, `dependent`, `sized`).
 - `src/minish/runner.zig`: Test runner. Defines `check` and `Options` (num_runs, seed, verbose, max shrink attempts).
 - `src/minish/shrink.zig`: Shrinking strategies for integers, floats, strings, lists, tuples, arrays, and optionals.
@@ -52,7 +53,8 @@ Priorities, in order:
 ### Property-Test Pipeline
 
 A property test flows through: Generator (`gen.zig` / `combinators.zig`) -> `TestCase` (`core.zig`) ->
-user property function -> Shrinker (`shrink.zig`) on failure -> reproducer report. `check` in `runner.zig` ties these together and owns the RNG seed, run count, and verbosity.
+user property function -> Shrinker (`shrink.zig`) on failure -> reproducer report. `check` in `runner.zig` ties these together and owns the RNG seed,
+run count, and verbosity.
 
 ### Generators and Combinators Split
 
@@ -63,11 +65,13 @@ user property function -> Shrinker (`shrink.zig`) on failure -> reproducer repor
 ### Shrinking
 
 Shrinking is the process of reducing a failing input to a smaller one that still reproduces the failure.
-Each shrinkable type lives alongside its shrinker logic in `shrink.zig`. When adding a new generator for a composite type, consider whether a shrinker is needed and add it to `shrink.zig`.
+Each shrinkable type lives alongside its shrinker logic in `shrink.zig`.
+When adding a new generator for a composite type, consider whether a shrinker is needed and add it to `shrink.zig`.
 
 ### Public API Surface
 
-Everything re-exported from `src/lib.zig` is part of the public API. Changes to names or signatures there are breaking.
+Everything re-exported from `src/lib.zig` is part of the public API.
+Changes to names or signatures there are breaking.
 The rest of `src/minish/` is internal and may be refactored freely as long as the public surface and its behavior are preserved.
 
 ### Dependencies
@@ -80,20 +84,21 @@ Please do not add dependencies without prior discussion.
 
 - Zig version: 0.16.0 (as declared in `build.zig.zon` and the Makefile's `ZIG_LOCAL` path).
 - Formatting is enforced by `zig fmt`. Run `make format` before committing.
-- Naming follows Zig standard-library conventions: `camelCase` for functions (e.g. `intRange`, `flatMap`, `oneOf`), `snake_case` for local variables and struct fields, `PascalCase` for types and structs, and `SCREAMING_SNAKE_CASE` for top-level compile-time constants.
+- Naming follows Zig standard-library conventions: `camelCase` for functions (e.g. `intRange`, `flatMap`, `oneOf`), `snake_case` for local variables
+  and struct fields, `PascalCase` for types and structs, and `SCREAMING_SNAKE_CASE` for top-level compile-time constants.
 
 ## Required Validation
 
 Run the relevant targets for any change:
 
-| Target          | Command        | What It Runs                                                        |
-|-----------------|----------------|---------------------------------------------------------------------|
-| Unit tests      | `make test`    | Inline `test` blocks across `src/lib.zig` and `src/minish/*.zig`    |
-| Lint            | `make lint`    | Checks Zig formatting with `zig fmt --check`                        |
-| Examples        | `zig build run-all` | Builds and runs every example under `examples/`                |
-| Single example  | `make run EXAMPLE=e1_simple_example` | Runs one example program                      |
-| Docs            | `make docs`    | Generates API docs into `docs/api`                                  |
-| Everything      | `make all`     | Runs `build`, `test`, `lint`, and `docs`                            |
+| Target         | Command                              | What It Runs                                                     |
+|----------------|--------------------------------------|------------------------------------------------------------------|
+| Unit tests     | `make test`                          | Inline `test` blocks across `src/lib.zig` and `src/minish/*.zig` |
+| Lint           | `make lint`                          | Checks Zig formatting with `zig fmt --check`                     |
+| Examples       | `zig build run-all`                  | Builds and runs every example under `examples/`                  |
+| Single example | `make run EXAMPLE=e1_simple_example` | Runs one example program                                         |
+| Docs           | `make docs`                          | Generates API docs into `docs/api`                               |
+| Everything     | `make all`                           | Runs `build`, `test`, `lint`, and `docs`                         |
 
 ## First Contribution Flow
 
@@ -112,8 +117,10 @@ Good first tasks:
 
 ## Testing Expectations
 
-- Unit and regression tests live as inline `test` blocks in the module they cover (`src/lib.zig` and `src/minish/*.zig`). There is no separate `tests/` directory.
-- Tests are discovered automatically via `std.testing.refAllDecls(@This())` in `src/lib.zig`, so new `test` blocks only need to live in a module that is reachable from `lib.zig`.
+- Unit and regression tests live as inline `test` blocks in the module they cover (`src/lib.zig` and `src/minish/*.zig`). There is no separate
+  `tests/` directory.
+- Tests are discovered automatically via `std.testing.refAllDecls(@This())` in `src/lib.zig`, so new `test` blocks only need to live in a module that
+  is reachable from `lib.zig`.
 - Every new generator, combinator, or shrinker must ship with at least one `test` block that exercises it, including shrink behavior where applicable.
 - Property tests should use fixed seeds (via `Options.seed`) so failures are reproducible in CI.
 - No public API change is complete without a test covering the new or changed behavior.
@@ -124,7 +131,8 @@ Before coding:
 
 1. Identify which module(s) the change touches (`gen`, `combinators`, `runner`, `shrink`, or `core`).
 2. Consider whether a new generator also needs a shrinker.
-3. Check whether the change is public-API-visible (i.e. re-exported from `src/lib.zig`); if so, treat it as a breaking or additive API change deliberately.
+3. Check whether the change is public-API-visible (i.e. re-exported from `src/lib.zig`); if so, treat it as a breaking or additive API change
+   deliberately.
 4. Check cross-platform implications, especially for anything that touches the filesystem, timing, or OS-specific types.
 
 Before submitting:
