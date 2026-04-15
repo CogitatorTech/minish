@@ -167,8 +167,7 @@ pub fn main() !void {
 You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).
 
 Alternatively, you can use the `make docs` command to generate the documentation for the current version of Minish.
-This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
-and view in a web browser.
+This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs` and view in a web browser.
 
 ### Examples
 
