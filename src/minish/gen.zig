@@ -82,6 +82,9 @@ pub fn int(comptime T: type) Generator(T) {
 /// const byte_gen = gen.intRange(u8, 0, 10);
 /// ```
 pub fn intRange(comptime T: type, comptime min: T, comptime max: T) Generator(T) {
+    comptime {
+        if (max < min) @compileError("intRange: max must be >= min");
+    }
     const RangeGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
             return tc.choiceInRange(T, min, max);
@@ -132,6 +135,9 @@ pub fn float(comptime T: type) Generator(T) {
 /// const prob = gen.floatRange(f32, 0.0, 1.0);
 /// ```
 pub fn floatRange(comptime T: type, comptime min: T, comptime max: T) Generator(T) {
+    comptime {
+        if (max < min) @compileError("floatRange: max must be >= min");
+    }
     const RangeGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
             // Generate a value in [0, 1] and scale to range
@@ -236,7 +242,7 @@ pub fn uuid() Generator([36]u8) {
                     result[pos] = '-';
                     pos += 1;
                 }
-                for (0..section_len) |i| {
+                for (0..section_len) |_| {
                     // UUID v4 specific: position 12 is always '4', position 16 is 8/9/a/b
                     if (pos == 14) {
                         result[pos] = '4';
@@ -248,7 +254,6 @@ pub fn uuid() Generator([36]u8) {
                         result[pos] = hex_chars[hex_val];
                     }
                     pos += 1;
-                    _ = i;
                 }
             }
 
@@ -270,6 +275,9 @@ pub fn timestamp() Generator(i64) {
 
 /// Generate Unix timestamps in a specific range.
 pub fn timestampRange(comptime min: i64, comptime max: i64) Generator(i64) {
+    comptime {
+        if (max < min) @compileError("timestampRange: max must be >= min");
+    }
     const TimestampGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!i64 {
             const range: u64 = @intCast(max - min);
@@ -398,9 +406,20 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
         fn generate(tc: *TestCase) core.GenError![]const T {
             const len = min_len + try tc.choice(max_len - min_len);
             var result = std.ArrayList(T).empty;
-            errdefer result.deinit(tc.allocator);
+            // On partial failure, free elements already produced by the inner
+            // generator before tearing down the list backing storage.
+            errdefer {
+                if (element_gen.freeFn) |freeFn| {
+                    for (result.items) |item| freeFn(tc.allocator, item);
+                }
+                result.deinit(tc.allocator);
+            }
             for (0..len) |_| {
-                try result.append(tc.allocator, try element_gen.generateFn(tc));
+                const elem = try element_gen.generateFn(tc);
+                result.append(tc.allocator, elem) catch |err| {
+                    if (element_gen.freeFn) |freeFn| freeFn(tc.allocator, elem);
+                    return err;
+                };
             }
             return result.toOwnedSlice(tc.allocator);
         }
@@ -438,37 +457,66 @@ pub fn hashMap(
     comptime min_entries: usize,
     comptime max_entries: usize,
 ) Generator(std.AutoHashMap(K, V)) {
+    comptime {
+        if (max_entries < min_entries) @compileError("hashMap generator: max_entries must be >= min_entries");
+        // std.AutoHashMap hashes the slice header, not its contents, which
+        // produces wrong results for content-equal-but-distinct slices. Use
+        // std.StringHashMap or write a custom map for slice keys.
+        const k_info = @typeInfo(K);
+        if (k_info == .pointer) {
+            @compileError("hashMap: slice/pointer key types are not supported by std.AutoHashMap (it hashes pointers, not contents). Use a custom hash map for slice keys.");
+        }
+    }
     const HashMapGenerator = struct {
+        fn freeEntries(allocator: std.mem.Allocator, map: *std.AutoHashMap(K, V)) void {
+            if (key_gen.freeFn != null or value_gen.freeFn != null) {
+                var it = map.iterator();
+                while (it.next()) |entry| {
+                    if (key_gen.freeFn) |freeKey| freeKey(allocator, entry.key_ptr.*);
+                    if (value_gen.freeFn) |freeVal| freeVal(allocator, entry.value_ptr.*);
+                }
+            }
+        }
+
         fn generate(tc: *TestCase) core.GenError!std.AutoHashMap(K, V) {
             const num_entries = min_entries + try tc.choice(max_entries - min_entries);
 
             var map = std.AutoHashMap(K, V).init(tc.allocator);
-            errdefer map.deinit();
+            // On partial failure, free any keys/values already inserted
+            // before tearing down the map itself.
+            errdefer {
+                freeEntries(tc.allocator, &map);
+                map.deinit();
+            }
 
             var i: usize = 0;
             while (i < num_entries) : (i += 1) {
                 const key = try key_gen.generateFn(tc);
-                const value = try value_gen.generateFn(tc);
-                try map.put(key, value);
+                const value = value_gen.generateFn(tc) catch |err| {
+                    if (key_gen.freeFn) |freeKey| freeKey(tc.allocator, key);
+                    return err;
+                };
+                // Put may fail with OOM; on failure, free the new k/v that
+                // were not yet handed off to the map.
+                const gop = map.getOrPut(key) catch |err| {
+                    if (key_gen.freeFn) |freeKey| freeKey(tc.allocator, key);
+                    if (value_gen.freeFn) |freeVal| freeVal(tc.allocator, value);
+                    return err;
+                };
+                if (gop.found_existing) {
+                    // Collision: discard the new key/value (the existing entry stays).
+                    if (key_gen.freeFn) |freeKey| freeKey(tc.allocator, key);
+                    if (value_gen.freeFn) |freeVal| freeVal(tc.allocator, gop.value_ptr.*);
+                }
+                gop.value_ptr.* = value;
             }
 
             return map;
         }
 
         fn free(allocator: std.mem.Allocator, map: std.AutoHashMap(K, V)) void {
-            // We need to free keys and values if they have freeFn
-            if (key_gen.freeFn != null or value_gen.freeFn != null) {
-                var it = map.iterator();
-                while (it.next()) |entry| {
-                    if (key_gen.freeFn) |freeKey| {
-                        freeKey(allocator, entry.key_ptr.*);
-                    }
-                    if (value_gen.freeFn) |freeVal| {
-                        freeVal(allocator, entry.value_ptr.*);
-                    }
-                }
-            }
             var mut_map = map;
+            freeEntries(allocator, &mut_map);
             mut_map.deinit();
         }
     };
@@ -483,8 +531,15 @@ pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Gener
     const ArrayGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![size]T {
             var result: [size]T = undefined;
-            for (0..size) |i| {
-                result[i] = try element_gen.generateFn(tc);
+            var filled: usize = 0;
+            // On partial failure, free elements already produced.
+            errdefer {
+                if (element_gen.freeFn) |freeFn| {
+                    for (result[0..filled]) |item| freeFn(tc.allocator, item);
+                }
+            }
+            while (filled < size) : (filled += 1) {
+                result[filled] = try element_gen.generateFn(tc);
             }
             return result;
         }
@@ -550,10 +605,12 @@ pub fn constant(comptime value: anytype) Generator(@TypeOf(value)) {
 pub fn tuple2(comptime T1: type, comptime T2: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2)) Generator(struct { T1, T2 }) {
     const TupleGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!struct { T1, T2 } {
-            return .{
-                try gen1.generateFn(tc),
-                try gen2.generateFn(tc),
+            const v1 = try gen1.generateFn(tc);
+            const v2 = gen2.generateFn(tc) catch |err| {
+                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
+                return err;
             };
+            return .{ v1, v2 };
         }
 
         fn free(allocator: std.mem.Allocator, value: struct { T1, T2 }) void {
@@ -571,11 +628,17 @@ pub fn tuple2(comptime T1: type, comptime T2: type, comptime gen1: Generator(T1)
 pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2), comptime gen3: Generator(T3)) Generator(struct { T1, T2, T3 }) {
     const TupleGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!struct { T1, T2, T3 } {
-            return .{
-                try gen1.generateFn(tc),
-                try gen2.generateFn(tc),
-                try gen3.generateFn(tc),
+            const v1 = try gen1.generateFn(tc);
+            const v2 = gen2.generateFn(tc) catch |err| {
+                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
+                return err;
             };
+            const v3 = gen3.generateFn(tc) catch |err| {
+                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
+                if (gen2.freeFn) |freeFn| freeFn(tc.allocator, v2);
+                return err;
+            };
+            return .{ v1, v2, v3 };
         }
 
         fn free(allocator: std.mem.Allocator, value: struct { T1, T2, T3 }) void {
@@ -585,64 +648,6 @@ pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime 
         }
     };
     return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = TupleGenerator.free };
-}
-
-// Legacy tuple function for backwards compatibility
-fn generate_tuple(tc: *TestCase) core.GenError!struct { i32, i32 } {
-    return .{
-        try generate_int(i32)(tc),
-        try generate_int(i32)(tc),
-    };
-}
-
-pub fn tuple() Generator(struct { i32, i32 }) {
-    return .{ .generateFn = generate_tuple, .shrinkFn = shrink_mod.tuple2IntShrinker(i32, i32), .freeFn = null };
-}
-
-// ============================================================================
-// Combinator: oneOf
-// ============================================================================
-
-/// Choose one generator from a list with equal probability.
-///
-/// Example:
-/// ```zig
-/// const mixed_gen = gen.oneOf(i32, &.{
-///     gen.intRange(i32, 0, 10),
-///     gen.constant(@as(i32, 100))
-/// });
-/// ```
-///
-/// Memory lifecycle: The returned value is owned by the Minish runner and will be freed automatically.
-/// Note: This assumes all generators share compatible memory management logic (e.g., typically same type).
-pub fn oneOf(comptime T: type, comptime generators: []const Generator(T)) Generator(T) {
-    const OneOfGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!T {
-            if (generators.len == 0) return error.InvalidChoice;
-            const idx = try tc.choice(generators.len - 1);
-            return generators[idx].generateFn(tc);
-        }
-
-        fn free(allocator: std.mem.Allocator, value: T) void {
-            // We don't know which generator created it, so we can't easily free it recursively
-            // without storing which generator was used.
-            // However, for OneOf, we assume all generators produce the same type T.
-            // If T has a single canonical free strategy (e.g. it's a struct with known fields),
-            // we could try to free it.
-            // But if T implies different allocation strategies per variant, it's hard.
-            // BEST EFFORT: Use the freeFn of the first generator if available?
-            // Or iterate generators? No, that's wrong.
-
-            // Correct approach: OneOf should return a wrapper or we accept that strict heterogeneity
-            // isn't supported for managed types OR we require all generators to share a freeFn logic.
-            // For now, let's assume if the first generator has a freeFn, it works for all
-            // (often they are same type generators).
-            if (generators.len > 0 and generators[0].freeFn != null) {
-                generators[0].freeFn.?(allocator, value);
-            }
-        }
-    };
-    return .{ .generateFn = OneOfGenerator.generate, .shrinkFn = null, .freeFn = OneOfGenerator.free };
 }
 
 // ============================================================================
@@ -668,19 +673,33 @@ pub fn structure(
     comptime T: type,
     comptime field_gens: anytype,
 ) Generator(T) {
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") {
+        @compileError("structure() requires a struct type");
+    }
     const StructGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
-            const type_info = @typeInfo(T);
-            if (type_info != .@"struct") {
-                @compileError("structure() requires a struct type");
-            }
-
             var result: T = undefined;
             const struct_info = type_info.@"struct";
+
+            // Track how many fields were successfully populated so we can
+            // free them on partial failure.
+            var filled_idx: usize = 0;
+            errdefer {
+                inline for (struct_info.fields, 0..) |field, i| {
+                    if (i < filled_idx) {
+                        const field_gen = @field(field_gens, field.name);
+                        if (field_gen.freeFn) |freeFn| {
+                            freeFn(tc.allocator, @field(result, field.name));
+                        }
+                    }
+                }
+            }
 
             inline for (struct_info.fields) |field| {
                 const field_gen = @field(field_gens, field.name);
                 @field(result, field.name) = try field_gen.generateFn(tc);
+                filled_idx += 1;
             }
 
             return result;
@@ -697,41 +716,6 @@ pub fn structure(
         }
     };
     return .{ .generateFn = StructGenerator.generate, .shrinkFn = null, .freeFn = StructGenerator.free };
-}
-
-// ============================================================================
-// Dependent Generator
-// ============================================================================
-
-/// Create a generator that depends on a previously generated value.
-/// Useful for generating related data where one field constrains another.
-pub fn dependent(
-    comptime T: type,
-    comptime U: type,
-    comptime first_gen: Generator(T),
-    comptime make_gen: fn (T) Generator(U),
-) Generator(struct { T, U }) {
-    const DependentGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!struct { T, U } {
-            const first_val = try first_gen.generateFn(tc);
-            const second_gen = make_gen(first_val);
-            const second_val = try second_gen.generateFn(tc);
-            return .{ first_val, second_val };
-        }
-
-        fn free(allocator: std.mem.Allocator, value: struct { T, U }) void {
-            if (first_gen.freeFn) |freeFn| {
-                freeFn(allocator, value[0]);
-            }
-            // For the dependent value, we need to regenerate the generator to access its freeFn.
-            // Ideally core.Generator would be uniform, but here make_gen is a function.
-            const second_gen = make_gen(value[0]);
-            if (second_gen.freeFn) |freeFn| {
-                freeFn(allocator, value[1]);
-            }
-        }
-    };
-    return .{ .generateFn = DependentGenerator.generate, .shrinkFn = null, .freeFn = DependentGenerator.free };
 }
 
 // ============================================================================
@@ -1122,45 +1106,6 @@ test "tuple3 generator produces valid tuples" {
     _ = value[2]; // u8
 }
 
-test "oneOf generator selects from alternatives" {
-    const allocator = testing.allocator;
-    var tc = TestCase.init(allocator, 12345);
-    defer tc.deinit();
-
-    const gen_one = oneOf(i32, &.{
-        intRange(i32, 0, 10),
-        intRange(i32, 100, 110),
-    });
-
-    for (0..20) |_| {
-        const value = try gen_one.generateFn(&tc);
-        try testing.expect((value >= 0 and value <= 10) or (value >= 100 and value <= 110));
-    }
-}
-
-test "dependent generator creates related values" {
-    const allocator = testing.allocator;
-    var tc = TestCase.init(allocator, 12345);
-    defer tc.deinit();
-
-    // Generate a bool, then based on it generate 0 or 100
-    const makeSecond = struct {
-        fn make(first: bool) Generator(i32) {
-            return if (first) constant(@as(i32, 100)) else constant(@as(i32, 0));
-        }
-    }.make;
-
-    const gen_dep = dependent(bool, i32, boolean(), makeSecond);
-    const value = try gen_dep.generateFn(&tc);
-
-    // If first is true, second should be 100; if false, second should be 0
-    if (value[0]) {
-        try testing.expectEqual(@as(i32, 100), value[1]);
-    } else {
-        try testing.expectEqual(@as(i32, 0), value[1]);
-    }
-}
-
 test "regression: signed int generator uses std.meta.Int correctly" {
     // Regression: @Type(.{ .int = ... }) was replaced with std.meta.Int(.unsigned, bits)
     // in Zig 0.16.0. Verify signed integers still generate across the full range.
@@ -1205,4 +1150,144 @@ test "regression: signed int generator uses std.meta.Int correctly" {
         const val = try gen_u8(&tc);
         try testing.expect(val <= 255);
     }
+}
+
+// ============================================================================
+// Regression Tests for Container Partial-Failure Leaks
+// ============================================================================
+//
+// Each container generator (list, hashMap, array, tuple2, tuple3, structure)
+// must free elements that have already been produced by an inner generator
+// when a later inner generation fails. Without that cleanup, the items
+// leaked silently. These tests use `testing.allocator`, which panics on leak.
+
+/// A generator over `[]const u8` that allocates its first `remaining`
+/// values normally and then returns `error.InvalidChoice` on every
+/// subsequent call. The countdown is module-level so the closures used
+/// inside container tests (which the container generators capture at
+/// comptime) can reach it.
+const FailingStringGen = struct {
+    var remaining: usize = 0;
+
+    fn reset(succeed_count: usize) void {
+        remaining = succeed_count;
+    }
+
+    fn generate_fn(tc: *TestCase) core.GenError![]const u8 {
+        if (remaining == 0) return error.InvalidChoice;
+        remaining -= 1;
+        const buf = try tc.allocator.alloc(u8, 3);
+        @memset(buf, 'a');
+        return buf;
+    }
+
+    fn free_fn(allocator: std.mem.Allocator, value: []const u8) void {
+        allocator.free(value);
+    }
+
+    const generator: Generator([]const u8) = .{
+        .generateFn = generate_fn,
+        .shrinkFn = null,
+        .freeFn = free_fn,
+    };
+};
+
+const FailingIntGen = struct {
+    fn generate_fn(_: *TestCase) core.GenError!i32 {
+        return error.InvalidChoice;
+    }
+
+    const generator: Generator(i32) = .{
+        .generateFn = generate_fn,
+        .shrinkFn = null,
+        .freeFn = null,
+    };
+};
+
+test "regression: list generator frees produced elements on partial failure" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Inner generator succeeds 3 times then fails; list asks for 5 items.
+    FailingStringGen.reset(3);
+    const list_gen = list([]const u8, FailingStringGen.generator, 5, 5);
+    try testing.expectError(core.GenError.InvalidChoice, list_gen.generateFn(&tc));
+}
+
+test "regression: hashMap generator frees produced entries on partial failure" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // Use the failing string generator as the value side; key uses i32.
+    // Produce 2 successful values, fail on the 3rd; ask for 5 entries.
+    FailingStringGen.reset(2);
+    const map_gen = hashMap(
+        i32,
+        []const u8,
+        intRange(i32, 0, 1_000_000),
+        FailingStringGen.generator,
+        5,
+        5,
+    );
+    try testing.expectError(core.GenError.InvalidChoice, map_gen.generateFn(&tc));
+}
+
+test "regression: array generator frees produced elements on partial failure" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    FailingStringGen.reset(2);
+    const arr_gen = array([]const u8, 5, FailingStringGen.generator);
+    try testing.expectError(core.GenError.InvalidChoice, arr_gen.generateFn(&tc));
+}
+
+test "regression: tuple2 frees first value when second generator fails" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // First generator always succeeds (allocates), second always fails.
+    FailingStringGen.reset(1);
+    const t = tuple2([]const u8, i32, FailingStringGen.generator, FailingIntGen.generator);
+    try testing.expectError(core.GenError.InvalidChoice, t.generateFn(&tc));
+}
+
+test "regression: structure frees populated fields when later field fails" {
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    FailingStringGen.reset(1);
+    const S = struct { name: []const u8, count: i32 };
+    const s_gen = structure(S, .{
+        .name = FailingStringGen.generator,
+        .count = FailingIntGen.generator,
+    });
+
+    try testing.expectError(core.GenError.InvalidChoice, s_gen.generateFn(&tc));
+}
+
+test "regression: hashMap with collisions does not leak duplicate keys/values" {
+    // With a tiny key range, every put attempt collides with an existing key.
+    // The new key and the displaced value must both be freed.
+    const allocator = testing.allocator;
+    var tc = TestCase.init(allocator, 12345);
+    defer tc.deinit();
+
+    // 10 put attempts, but key range is only [0, 1] so at least 8 collisions.
+    FailingStringGen.reset(10);
+    const map_gen = hashMap(
+        i32,
+        []const u8,
+        intRange(i32, 0, 1),
+        FailingStringGen.generator,
+        10,
+        10,
+    );
+    var map = try map_gen.generateFn(&tc);
+    defer map_gen.freeFn.?(allocator, map);
+    try testing.expect(map.count() <= 2);
 }

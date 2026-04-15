@@ -77,7 +77,7 @@ pub fn main() !void {
         }
     }.square;
 
-    const squared_gen = combinators.map(i32, i32, gen.intRange(i32, -100, 100), square_fn);
+    const squared_gen = combinators.map(i32, i32, gen.intRange(i32, -100, 100), square_fn, null);
     try minish.check(allocator, squared_gen, test_map_squares, .{ .num_runs = 100 });
 
     // Example 3: Filter Combinator

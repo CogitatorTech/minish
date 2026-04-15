@@ -50,7 +50,7 @@ pub fn main() !void {
     std.debug.print("Property: a + b <= 1000 for positive a, b\n", .{});
     std.debug.print("Watch how the failing input is minimized:\n\n", .{});
 
-    const tuple_gen = gen.tuple();
+    const tuple_gen = gen.tuple2(i32, i32, gen.int(i32), gen.int(i32));
     _ = minish.check(allocator, tuple_gen, sum_below_1000, .{ .num_runs = 100 }) catch |err| {
         std.debug.print("\nProperty failed with: {s}\n", .{@errorName(err)});
         std.debug.print("The shrinker found a minimal counterexample!\n\n", .{});

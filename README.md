@@ -57,10 +57,10 @@ Here is a brief comparison between example-based testing and property-based test
 ### Why Minish?
 
 - Written in pure Zig with no external dependencies
-- Includes over 25 built-in generators (like for integers, floats, strings, lists, structs, UUIDs, timestamps, etc.)
-- Combinators to build complex generators from simple ones (map, filter, flatMap, frequency)
-- Supports automatic shrinking for integers, floats, strings, lists, tuples, and arrays
-- Supports reproducible failures and verbose mode
+- Includes over 20 built-in generators (for integers, floats, strings, lists, structs, UUIDs, timestamps, and more)
+- Seven combinators for composing generators (`map`, `flatMap`, `filter`, `sized`, `frequency`, `oneOf`, and `dependent`)
+- Supports automatic shrinking for integers, floats, strings, lists, tuples, arrays, and optionals
+- Supports reproducible failures via fixed seeds and a verbose mode
 - Configurable and easy to integrate into existing Zig projects
 
 See [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
@@ -83,11 +83,17 @@ Run the following command in the root directory of your project to download Mini
 zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch_or_tag>.tar.gz"
 ```
 
-Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.1.0`.
+Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.3.0`.
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
-> [!NOTE]
-> Minish is developed and tested with Zig version 0.16.0.
+Zig version supported by the main releases of Minish:
+
+| Zig      | Minish Tags |
+|----------|-------------|
+| `0.16.0` | `v0.3.x`    |
+| `0.15.2` | `v0.1.x`    |
+
+The `main` branch normally tracks the latest (non-developmental) Zig release.
 
 #### Adding to Build Script
 
@@ -161,8 +167,7 @@ pub fn main() !void {
 You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).
 
 Alternatively, you can use the `make docs` command to generate the documentation for the current version of Minish.
-This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs`
-and view in a web browser.
+This will generate HTML documentation in the `docs/api` directory, which you can serve locally with `make serve-docs` and view in a web browser.
 
 ### Examples
 

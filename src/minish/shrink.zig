@@ -219,6 +219,13 @@ pub fn float(comptime T: type, allocator: std.mem.Allocator, value: T) Iterator(
 
 /// Shrink a float value towards a specific target.
 pub fn floatTowards(comptime T: type, allocator: std.mem.Allocator, value: T, target: T) Iterator(T) {
+    // Binary search on non-finite inputs (NaN/inf) cannot make progress and
+    // would otherwise dead-loop or terminate with no candidates. Skip
+    // shrinking entirely so the runner reports the original failing value.
+    if (!std.math.isFinite(value) or !std.math.isFinite(target)) {
+        return Iterator(T).empty();
+    }
+
     const Context = FloatShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator(T).empty();
 
@@ -950,4 +957,29 @@ test "tuple2 shrinking produces smaller values" {
         if (count > 20) break;
     }
     try testing.expect(count > 0);
+}
+
+test "regression: float shrinker returns no candidates for non-finite inputs" {
+    // Bug: the binary-search loop on inf/NaN inputs computed inf/NaN deltas,
+    // which either dead-looped or terminated with no progress.
+    // Fix: floatTowards now returns an empty iterator for non-finite values.
+    const allocator = testing.allocator;
+
+    {
+        var it_inf = float(f64, allocator, std.math.inf(f64));
+        defer it_inf.deinit();
+        try testing.expectEqual(@as(?f64, null), it_inf.next());
+    }
+
+    {
+        var it_nan = float(f64, allocator, std.math.nan(f64));
+        defer it_nan.deinit();
+        try testing.expectEqual(@as(?f64, null), it_nan.next());
+    }
+
+    {
+        var it_neg = float(f64, allocator, -std.math.inf(f64));
+        defer it_neg.deinit();
+        try testing.expectEqual(@as(?f64, null), it_neg.next());
+    }
 }

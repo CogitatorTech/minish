@@ -59,7 +59,7 @@ pub fn main() !void {
 
     // 1. oneOf
     std.debug.print("Test 1: oneOf (mixed ranges)\n", .{});
-    const mixed_gen = gen.oneOf(i32, &.{
+    const mixed_gen = combinators.oneOf(i32, &.{
         gen.intRange(i32, 0, 10),
         gen.constant(@as(i32, 1000)),
     });
@@ -80,7 +80,7 @@ pub fn main() !void {
                 }
             }
         }.make;
-        const dep_gen = gen.dependent(bool, i32, bool_gen, make_int_gen);
+        const dep_gen = combinators.dependent(bool, i32, bool_gen, make_int_gen);
     };
     try minish.check(allocator, Dep.dep_gen, test_dependent_logic, .{ .num_runs = 50 });
 
