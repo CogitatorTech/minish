@@ -77,6 +77,21 @@ pub const TestCase = struct {
 
     /// Make a choice in the given range [min, max] (inclusive).
     pub fn choiceInRange(self: *TestCase, comptime T: type, min: T, max: T) GenError!T {
+        comptime {
+            const info = @typeInfo(T);
+            if (info != .int) {
+                @compileError("choiceInRange: T must be an integer type");
+            }
+            // The spread `max - min` is computed as i128 below and then cast
+            // to u64 (the width of `tc.choice`'s argument). Types narrower
+            // than 64 bits always fit; 64-bit types fit because the spread
+            // of any [min, max] subrange of T is at most maxInt(u64). Wider
+            // types can produce a spread > maxInt(u64) and would panic on
+            // the `@intCast(... u64)` below.
+            if (info.int.bits > 64) {
+                @compileError("choiceInRange: integer types wider than 64 bits are not supported");
+            }
+        }
         if (min > max) return error.InvalidChoice;
         // Use wider arithmetic to avoid overflow when computing range
         const min_wide: i128 = @intCast(min);

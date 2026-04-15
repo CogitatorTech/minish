@@ -64,7 +64,8 @@ Its presence does not imply endorsement of any specific AI tool or service.
 ## Licensing Note
 
 Minish is licensed under Apache-2.0 and has no external Zig or C dependencies, so all source in this repository is expected to be originally authored
-by contributors. AI-generated code of unclear provenance would muddy that boundary, which is another reason to keep contributions human-authored.
+by contributors.
+AI-generated code of unclear provenance would muddy that boundary, which is another reason to keep contributions human-authored.
 
 ## AI Disclosure
 

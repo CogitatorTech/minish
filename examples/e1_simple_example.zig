@@ -22,7 +22,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // 1. Create a generator.
-    const tuple_generator = gen.tuple();
+    const tuple_generator = gen.tuple2(i32, i32, gen.int(i32), gen.int(i32));
 
     // 2. Pass the generator and test function directly to check.
     minish.check(allocator, tuple_generator, sum_is_less_than_1500, .{}) catch |err| {

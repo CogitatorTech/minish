@@ -113,6 +113,10 @@ pub fn check(
                             freeFn(allocator, next_val);
                         }
                     } else |_| {
+                        // Order matters: the live iterator may hold a reference
+                        // to `minimal_value` via its internal state. Tear down the
+                        // iterator before freeing the value it referenced.
+                        it.deinit();
                         if (!minimal_is_original) {
                             if (generator.freeFn) |freeFn| {
                                 freeFn(allocator, minimal_value);
@@ -120,7 +124,6 @@ pub fn check(
                         }
                         minimal_value = next_val;
                         minimal_is_original = false;
-                        it.deinit();
                         it = shrinker(allocator, minimal_value);
                     }
                 }

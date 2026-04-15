@@ -73,7 +73,10 @@ pub fn build(b: *std.Build) void {
 
             run_all_step.dependOn(run_example_step);
         }
-    } else |_| {
-        // examples directory doesn't exist (e.g., when used as a library dependency)
+    } else |err| switch (err) {
+        // Used as a library dependency: no examples directory at the import root.
+        error.FileNotFound => {},
+        // Surface other errors (permissions, IO) instead of swallowing them.
+        else => @panic(@errorName(err)),
     }
 }
