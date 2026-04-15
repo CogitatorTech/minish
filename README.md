@@ -57,10 +57,10 @@ Here is a brief comparison between example-based testing and property-based test
 ### Why Minish?
 
 - Written in pure Zig with no external dependencies
-- Includes over 25 built-in generators (like for integers, floats, strings, lists, structs, UUIDs, timestamps, etc.)
-- Combinators to build complex generators from simple ones (map, filter, flatMap, frequency)
-- Supports automatic shrinking for integers, floats, strings, lists, tuples, and arrays
-- Supports reproducible failures and verbose mode
+- Includes over 20 built-in generators (for integers, floats, strings, lists, structs, UUIDs, timestamps, and more)
+- Seven combinators for composing generators (`map`, `flatMap`, `filter`, `sized`, `frequency`, `oneOf`, and `dependent`)
+- Supports automatic shrinking for integers, floats, strings, lists, tuples, arrays, and optionals
+- Supports reproducible failures via fixed seeds and a verbose mode
 - Configurable and easy to integrate into existing Zig projects
 
 See [ROADMAP.md](ROADMAP.md) for the list of implemented and planned features.
@@ -83,7 +83,7 @@ Run the following command in the root directory of your project to download Mini
 zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch_or_tag>.tar.gz"
 ```
 
-Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.1.0`.
+Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.3.0`.
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
 Zig version supported by each tagged release:
