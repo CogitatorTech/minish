@@ -12,7 +12,7 @@ Minish is designed to be embedded in Zig projects as a pure-Zig library.
 Priorities, in order:
 
 1. Correctness of generators, combinators, and shrinking.
-2. Clean, minimal public API for use as a library from other Zig projects.
+2. Minimal public API for use as a library from other Zig projects.
 3. Zero non-Zig dependencies and maintainable, well-tested code.
 4. Cross-platform support (Linux, macOS, and Windows).
 
@@ -98,7 +98,7 @@ Run the relevant targets for any change:
 ## First Contribution Flow
 
 1. Read the relevant module under `src/minish/` (often `gen.zig`, `combinators.zig`, or `shrink.zig`).
-2. Implement the smallest possible change.
+2. Implement the smallest change that covers the requirement.
 3. Add or update inline `test` blocks in the changed Zig module to cover the new behavior.
 4. Run `make test` and `make lint`.
 5. If public behavior changed, also run `zig build run-all` to ensure no example regresses.
@@ -115,7 +115,7 @@ Good first tasks:
 - Unit and regression tests live as inline `test` blocks in the module they cover (`src/lib.zig` and `src/minish/*.zig`). There is no separate `tests/` directory.
 - Tests are discovered automatically via `std.testing.refAllDecls(@This())` in `src/lib.zig`, so new `test` blocks only need to live in a module that is reachable from `lib.zig`.
 - Every new generator, combinator, or shrinker must ship with at least one `test` block that exercises it, including shrink behavior where applicable.
-- Property-heavy tests should use fixed seeds (via `Options.seed`) so failures are reproducible in CI.
+- Property tests should use fixed seeds (via `Options.seed`) so failures are reproducible in CI.
 - No public API change is complete without a test covering the new or changed behavior.
 
 ## Change Design Checklist

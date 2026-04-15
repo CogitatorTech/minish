@@ -20,8 +20,8 @@ silently weaken every downstream test suite that depends on Minish, so human own
 ## Getting Help
 
 Before asking an AI, please open or comment on an issue on the [Minish issue tracker](https://github.com/CogitatorTech/minish/issues). There are
-no silly questions, and property-based-testing topics (generator design, shrinking strategies, seed reproducibility, combinator semantics, and Zig
-allocator / lifetime management) are an area where LLMs often give confident but incorrect answers.
+no silly questions, and property-based testing topics (generator design, shrinking strategies, seed reproducibility, combinator semantics, and Zig
+allocator and lifetime management) are an area where LLMs often give confident but incorrect answers.
 
 If you do use AI tools, use them for assistance (like a reference or tutor), not generatively (to fully write code for you).
 
