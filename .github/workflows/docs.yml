@@ -1,4 +1,4 @@
-name: Publish API documentation
+name: Publish API Documentation
 
 on:
   workflow_dispatch:
