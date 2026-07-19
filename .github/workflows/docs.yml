@@ -6,10 +6,6 @@ on:
     tags:
       - 'v*'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   pages: write
@@ -25,12 +21,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Zig 0.16.0
-        run: |
-          curl -sSfL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz | tar -xJ
-          echo "$PWD/zig-x86_64-linux-0.16.0" >> "$GITHUB_PATH"
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: '0.16.0'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y make
@@ -38,10 +34,10 @@ jobs:
       - name: Generate documentation
         run: make docs
 
-      - name: Setup Pages
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Pages artifact
+      - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./docs/api
