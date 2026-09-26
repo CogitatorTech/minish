@@ -260,6 +260,8 @@ fn ListShrinkContext(comptime T: type) type {
         element_idx: usize,
         element_iterator: ?Iterator(T),
         element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
+        element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+        element_free: ?*const fn (std.mem.Allocator, T) void,
         phase: Phase,
 
         const Phase = enum {
@@ -311,8 +313,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         }
 
                         // Remove from end: keep first new_len elements
-                        const shrunken = context.allocator.alloc(T, new_len) catch return null;
-                        @memcpy(shrunken, context.original[0..new_len]);
+                        const shrunken = cloneList(T, context.allocator, context.original[0..new_len], context.element_clone, context.element_free) catch return null;
 
                         context.current_len = new_len;
                         context.remove_count /= 2;
@@ -340,8 +341,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         }
 
                         // Remove from start: skip first remove_count elements
-                        const shrunken = context.allocator.alloc(T, new_len) catch return null;
-                        @memcpy(shrunken, context.original[context.remove_count..context.current_len]);
+                        const shrunken = cloneList(T, context.allocator, context.original[context.remove_count..context.current_len], context.element_clone, context.element_free) catch return null;
 
                         context.current_len = new_len;
                         context.remove_count /= 2;
@@ -365,6 +365,10 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         if (context.remove_pos < new_len) {
                             @memcpy(shrunken[context.remove_pos..], context.original[context.remove_pos + 1 ..]);
                         }
+                        cloneElements(T, context.allocator, shrunken, context.element_clone, context.element_free, null) catch {
+                            context.allocator.free(shrunken);
+                            return null;
+                        };
 
                         context.remove_pos += 1;
 
@@ -377,8 +381,16 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                                 context.element_iterator = shrinker(context.allocator, context.original[context.element_idx]);
                             }
                             if (context.element_iterator.?.next()) |element| {
-                                const shrunken = context.allocator.dupe(T, context.original) catch return null;
+                                const shrunken = context.allocator.dupe(T, context.original) catch {
+                                    if (context.element_free) |free| free(context.allocator, element);
+                                    return null;
+                                };
                                 shrunken[context.element_idx] = element;
+                                cloneElements(T, context.allocator, shrunken, context.element_clone, context.element_free, context.element_idx) catch {
+                                    if (context.element_free) |free| free(context.allocator, element);
+                                    context.allocator.free(shrunken);
+                                    return null;
+                                };
                                 return shrunken;
                             }
                             context.element_iterator.?.deinit();
@@ -418,6 +430,21 @@ pub fn listAtLeast(
     min_len: usize,
     element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
 ) Iterator([]const T) {
+    return listWithOwnership(T, allocator, value, min_len, element_shrinker, null, null);
+}
+
+/// Shrink lists whose retained elements can be independently cloned and freed.
+/// Owned elements produced by element_shrinker must support element_free.
+pub fn listWithOwnership(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    value: []const T,
+    min_len: usize,
+    element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
+    element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+    element_free: ?*const fn (std.mem.Allocator, T) void,
+) Iterator([]const T) {
+    std.debug.assert(element_free == null or element_clone != null);
     const Context = ListShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator([]const T).empty();
 
@@ -431,6 +458,8 @@ pub fn listAtLeast(
         .element_idx = 0,
         .element_iterator = null,
         .element_shrinker = element_shrinker,
+        .element_clone = element_clone,
+        .element_free = element_free,
         .phase = if (value.len <= min_len) .ShrinkElements else .TryEmpty,
     };
 
@@ -439,6 +468,42 @@ pub fn listAtLeast(
         .nextFn = makeListShrinkNext(T),
         .deinitFn = makeListShrinkDeinit(T),
     };
+}
+
+fn cloneElements(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    values: []T,
+    clone_fn: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+    free_fn: ?*const fn (std.mem.Allocator, T) void,
+    skip_idx: ?usize,
+) std.mem.Allocator.Error!void {
+    const clone = clone_fn orelse return;
+    var copied: usize = 0;
+    errdefer if (free_fn) |free| {
+        for (values[0..copied], 0..) |item, i| {
+            if (skip_idx == null or i != skip_idx.?) free(allocator, item);
+        }
+    };
+    while (copied < values.len) : (copied += 1) {
+        if (skip_idx != null and copied == skip_idx.?) continue;
+        values[copied] = try clone(allocator, values[copied]);
+    }
+}
+
+/// Copy a list and independently clone its owned elements.
+pub fn cloneList(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    value: []const T,
+    element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+    element_free: ?*const fn (std.mem.Allocator, T) void,
+) std.mem.Allocator.Error![]const T {
+    std.debug.assert(element_free == null or element_clone != null);
+    const result = try allocator.dupe(T, value);
+    errdefer allocator.free(result);
+    try cloneElements(T, allocator, result, element_clone, element_free, null);
+    return result;
 }
 
 // ============================================================================
@@ -1059,6 +1124,30 @@ test "list element shrinking handles empty lists and early iterator cleanup" {
     defer testing.allocator.free(candidate);
     try testing.expectEqualSlices(i32, &.{0}, candidate);
     // Leave the element iterator active to verify that deinit releases it.
+}
+
+test "owned list shrinking cleans up at every allocation failure" {
+    const gen = @import("gen.zig");
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator, min_len: usize) void {
+            const strings = gen.string(.{ .min_len = 1 });
+            var it = listWithOwnership([]const u8, allocator, &.{ "abcd", "efgh", "ijkl" }, min_len, strings.shrinkFn, strings.cloneFn, strings.freeFn);
+            defer it.deinit();
+            const lists = gen.list([]const u8, gen.string(.{}), 0, 3);
+            while (it.next()) |candidate| lists.freeFn.?(allocator, candidate);
+        }
+    };
+    for ([_]usize{ 0, 3 }) |min_len| {
+        var counter = testing.FailingAllocator.init(testing.allocator, .{});
+        Test.run(counter.allocator(), min_len);
+        try testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
+        for (0..counter.alloc_index) |fail_index| {
+            var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+            Test.run(failing.allocator(), min_len);
+            try testing.expect(failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        }
+    }
 }
 
 test "regression: integer shrinking tries the target and handles extreme bounds" {

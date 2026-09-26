@@ -26,13 +26,17 @@ const TestCase = core.TestCase;
 /// A generator produces values of type T from random choices.
 /// Each generator has:
 /// - `generateFn`: Creates a value from a TestCase
-/// - `shrinkFn`: Optional function to produce smaller values for shrinking
+/// - `shrinkFn`: Optional function to produce independently owned shrink candidates
 /// - `freeFn`: Optional function to free allocated memory
+/// - `cloneFn`: Optional function to create an independently owned copy
 pub fn Generator(comptime T: type) type {
     return struct {
         generateFn: *const fn (tc: *TestCase) core.GenError!T,
         shrinkFn: ?*const fn (std.mem.Allocator, T) shrink_mod.Iterator(T),
         freeFn: ?*const fn (std.mem.Allocator, T) void,
+        /// Copies must use the supplied allocator and support cleanup with freeFn.
+        /// On error, cloneFn must release any allocations it made.
+        cloneFn: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T = null,
     };
 }
 
@@ -381,8 +385,12 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
         fn free(allocator: std.mem.Allocator, value: []const u8) void {
             allocator.free(value);
         }
+
+        fn clone(allocator: std.mem.Allocator, value: []const u8) std.mem.Allocator.Error![]const u8 {
+            return allocator.dupe(u8, value);
+        }
     };
-    return .{ .generateFn = StringGenerator.generate, .shrinkFn = StringGenerator.shrink, .freeFn = StringGenerator.free };
+    return .{ .generateFn = StringGenerator.generate, .shrinkFn = StringGenerator.shrink, .freeFn = StringGenerator.free, .cloneFn = StringGenerator.clone };
 }
 
 // ============================================================================
@@ -390,7 +398,7 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 // ============================================================================
 
 /// Generate a list of values.
-/// Automatic shrinking is available only when the element generator has no freeFn.
+/// Owned elements require a cloneFn for automatic shrinking.
 /// Shrunk lists retain the configured minimum length.
 /// Elements are shrunk using the element generator's shrinkFn after removal attempts.
 ///
@@ -429,7 +437,7 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
         }
 
         fn shrink(allocator: std.mem.Allocator, value: []const T) shrink_mod.Iterator([]const T) {
-            return shrink_mod.listAtLeast(T, allocator, value, min_len, element_gen.shrinkFn);
+            return shrink_mod.listWithOwnership(T, allocator, value, min_len, element_gen.shrinkFn, element_gen.cloneFn, element_gen.freeFn);
         }
 
         fn free(allocator: std.mem.Allocator, value: []const T) void {
@@ -440,10 +448,18 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
             }
             allocator.free(value);
         }
+
+        fn clone(allocator: std.mem.Allocator, value: []const T) std.mem.Allocator.Error![]const T {
+            return shrink_mod.cloneList(T, allocator, value, element_gen.cloneFn, element_gen.freeFn);
+        }
     };
-    // ponytail: owned elements have no clone operation; enable shrinking when
-    // generators can produce independently owned copies of retained elements.
-    return .{ .generateFn = ListGenerator.generate, .shrinkFn = if (element_gen.freeFn == null) ListGenerator.shrink else null, .freeFn = ListGenerator.free };
+    const can_clone = element_gen.freeFn == null or element_gen.cloneFn != null;
+    return .{
+        .generateFn = ListGenerator.generate,
+        .shrinkFn = if (can_clone) ListGenerator.shrink else null,
+        .freeFn = ListGenerator.free,
+        .cloneFn = if (can_clone) ListGenerator.clone else null,
+    };
 }
 
 // ============================================================================
@@ -1305,7 +1321,7 @@ test "regression: hashMap with collisions does not leak duplicate keys/values" {
 test "regression: nested lists retain ownership when properties fail" {
     const runner = @import("runner.zig");
     const g = list([]const u8, string(.{ .min_len = 1, .max_len = 1 }), 2, 2);
-    try testing.expect(g.shrinkFn == null);
+    try testing.expect(g.shrinkFn != null);
     const Property = struct {
         fn checkValue(_: []const []const u8) !void {
             return error.PropertyFailed;
@@ -1316,6 +1332,99 @@ test "regression: nested lists retain ownership when properties fail" {
         .num_runs = 1,
     }));
     try testing.expect(list(i32, int(i32), 0, 10).shrinkFn != null);
+
+    const uncloneable = comptime Generator([]const u8){
+        .generateFn = string(.{}).generateFn,
+        .shrinkFn = string(.{}).shrinkFn,
+        .freeFn = string(.{}).freeFn,
+    };
+    const uncloneable_list = list([]const u8, uncloneable, 0, 2);
+    try testing.expect(uncloneable_list.shrinkFn == null);
+    try testing.expect(uncloneable_list.cloneFn == null);
+}
+
+test "owned string elements shrink through the runner without leaking" {
+    const runner = @import("runner.zig");
+    const Strings = struct {
+        fn generate(tc: *TestCase) core.GenError![]const u8 {
+            return tc.allocator.dupe(u8, "xxxx");
+        }
+    };
+    const element_gen = comptime Generator([]const u8){
+        .generateFn = Strings.generate,
+        .shrinkFn = string(.{ .min_len = 1 }).shrinkFn,
+        .freeFn = string(.{}).freeFn,
+        .cloneFn = string(.{}).cloneFn,
+    };
+    const Property = struct {
+        var last_failure: [2]usize = undefined;
+        var passing_candidates: usize = 0;
+        fn checkValue(value: []const []const u8) !void {
+            try testing.expectEqual(@as(usize, 2), value.len);
+            for (value) |s| try testing.expect(s.len >= 1);
+            if (value[0].len + value[1].len > 2) {
+                last_failure = .{ value[0].len, value[1].len };
+                return error.PropertyFailed;
+            }
+            passing_candidates += 1;
+        }
+    };
+    for ([_]u32{ 0, 1, 2, 1000 }) |budget| {
+        Property.passing_candidates = 0;
+        try testing.expectError(error.PropertyFailed, runner.check(
+            testing.allocator,
+            list([]const u8, element_gen, 2, 2),
+            Property.checkValue,
+            .{ .seed = 1, .num_runs = 1, .max_shrink_attempts = budget },
+        ));
+    }
+    try testing.expectEqualSlices(usize, &.{ 1, 2 }, &Property.last_failure);
+    try testing.expect(Property.passing_candidates > 0);
+}
+
+test "nested list clones and shrink candidates own independent elements" {
+    const g = list([]const []const u8, list([]const u8, string(.{ .min_len = 1 }), 1, 2), 1, 2);
+    const original = try g.cloneFn.?(testing.allocator, &.{ &.{ "abc", "def" }, &.{ "ghi", "jkl" } });
+    defer g.freeFn.?(testing.allocator, original);
+
+    const copy = try g.cloneFn.?(testing.allocator, original);
+    @constCast(copy[0][0])[0] = 'z';
+    try testing.expectEqualStrings("abc", original[0][0]);
+    g.freeFn.?(testing.allocator, copy);
+
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    var saw_removal = false;
+    var saw_element = false;
+    while (it.next()) |candidate| {
+        defer g.freeFn.?(testing.allocator, candidate);
+        if (candidate.len < original.len) saw_removal = true else saw_element = true;
+        try testing.expect(candidate.len >= 1);
+        for (candidate) |inner| {
+            try testing.expect(inner.len >= 1);
+            for (inner) |s| {
+                try testing.expect(s.len >= 1);
+                for (original) |previous_inner| {
+                    for (previous_inner) |previous| try testing.expect(s.ptr != previous.ptr);
+                }
+            }
+        }
+    }
+    try testing.expect(saw_removal and saw_element);
+    try testing.expectEqualStrings("abc", original[0][0]);
+    try testing.expectEqualStrings("jkl", original[1][1]);
+}
+
+test "nested list cloning cleans up partial allocation failures" {
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            const g = list([]const []const u8, list([]const u8, string(.{}), 0, 2), 0, 2);
+            const copy = try g.cloneFn.?(allocator, &.{ &.{ "abc", "def" }, &.{ "ghi", "jkl" } });
+            defer g.freeFn.?(allocator, copy);
+            try testing.expectEqualStrings("jkl", copy[1][1]);
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Test.run, .{});
 }
 
 test "regression: constrained generators preserve bounds while shrinking" {

@@ -172,9 +172,11 @@ You can find the API documentation for the latest release of Minish [here](https
 > Shrinking keeps the numeric ranges and minimum collection lengths.
 > List shrinking tries removing elements first, then uses the element generator's
 > shrinker to simplify individual values without changing the list length.
-> Lists shrink automatically only when their element generator has no `freeFn`.
-> Lists with owned elements, such as generated strings, keep their original failing input because the generator
-> API does not provide an operation to clone elements.
+> Strings and nested lists shrink with independently owned copies of retained elements.
+> Custom generators with a `freeFn` must also provide a `cloneFn` to enable list shrinking.
+> A clone must use the supplied allocator, support the same `freeFn`, and release any
+> partial allocations if cloning fails. `cloneFn` defaults to `null`, so existing custom
+> generators keep their current behavior until they supply a clone function.
 
 ### Examples
 
