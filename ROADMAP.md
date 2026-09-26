@@ -49,7 +49,7 @@ This document outlines the features implemented in Minish and the future goals f
 - [x] Array shrinking (element-wise)
 - [x] Optional shrinking (try null first)
 - [ ] Struct shrinking (field-wise)
-- [ ] Element-wise list shrinking (shrink elements in place)
+- [x] Element-wise list shrinking (elements without a `freeFn`)
 - [ ] Ownership-safe list shrinking for elements with a `freeFn`
 
 ### Test Runner

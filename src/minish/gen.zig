@@ -375,7 +375,7 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
         }
 
         fn shrink(allocator: std.mem.Allocator, value: []const u8) shrink_mod.Iterator([]const u8) {
-            return shrink_mod.listAtLeast(u8, allocator, value, config.min_len);
+            return shrink_mod.listAtLeast(u8, allocator, value, config.min_len, null);
         }
 
         fn free(allocator: std.mem.Allocator, value: []const u8) void {
@@ -392,6 +392,7 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 /// Generate a list of values.
 /// Automatic shrinking is available only when the element generator has no freeFn.
 /// Shrunk lists retain the configured minimum length.
+/// Elements are shrunk using the element generator's shrinkFn after removal attempts.
 ///
 /// Example:
 /// ```zig
@@ -428,7 +429,7 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
         }
 
         fn shrink(allocator: std.mem.Allocator, value: []const T) shrink_mod.Iterator([]const T) {
-            return shrink_mod.listAtLeast(T, allocator, value, min_len);
+            return shrink_mod.listAtLeast(T, allocator, value, min_len, element_gen.shrinkFn);
         }
 
         fn free(allocator: std.mem.Allocator, value: []const T) void {
@@ -1348,13 +1349,16 @@ test "regression: constrained generators preserve bounds while shrinking" {
         var count: usize = 0;
         while (it.next()) |candidate| {
             defer g.freeFn.?(testing.allocator, candidate);
-            try testing.expect(candidate.len >= 3 and candidate.len < 6);
+            try testing.expect(candidate.len >= 3 and candidate.len <= 6);
             count += 1;
         }
         try testing.expect(count > 0);
         var minimum = g.shrinkFn.?(testing.allocator, "abc");
         defer minimum.deinit();
-        try testing.expect(minimum.next() == null);
+        while (minimum.next()) |candidate| {
+            defer g.freeFn.?(testing.allocator, candidate);
+            try testing.expectEqual(@as(usize, 3), candidate.len);
+        }
     }
 }
 
@@ -1373,6 +1377,32 @@ test "regression: finite float ranges do not overflow" {
             if (choice == std.math.maxInt(u32)) try testing.expectEqual(bound, value);
         }
     }
+}
+
+test "list shrinking minimizes elements through the runner" {
+    const runner = @import("runner.zig");
+    const Property = struct {
+        var last_failure: [2]i32 = undefined;
+        fn checkValue(value: []const i32) !void {
+            try testing.expectEqual(@as(usize, 2), value.len);
+            if (value[0] + value[1] > 8) {
+                @memcpy(&last_failure, value);
+                return error.PropertyFailed;
+            }
+        }
+    };
+    const element_gen = comptime Generator(i32){
+        .generateFn = constant(@as(i32, 100)).generateFn,
+        .shrinkFn = int(i32).shrinkFn,
+        .freeFn = null,
+    };
+    try testing.expectError(error.PropertyFailed, runner.check(
+        testing.allocator,
+        list(i32, element_gen, 2, 2),
+        Property.checkValue,
+        .{ .seed = 1, .num_runs = 1 },
+    ));
+    try testing.expectEqualSlices(i32, &.{ 0, 9 }, &Property.last_failure);
 }
 
 test "regression: timestamps support the full signed range" {

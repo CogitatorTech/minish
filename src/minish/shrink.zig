@@ -7,7 +7,7 @@
 //! - **Integers/Floats**: Uses binary search to efficiently find the boundary between
 //!   passing and failing values. This guarantees finding the minimal failure
 //!   (e.g., finding 9 if the failure is > 8).
-//! - **Collections**: Removes elements from the beginning, end, or middle to reduce size.
+//! - **Collections**: Removes elements to reduce size, then shrinks individual values.
 //!
 //! Each shrinker produces an `Iterator` of progressively smaller values.
 //! The test runner tries each candidate until no smaller failing input exists.
@@ -257,6 +257,9 @@ fn ListShrinkContext(comptime T: type) type {
         current_len: usize,
         remove_count: usize,
         remove_pos: usize,
+        element_idx: usize,
+        element_iterator: ?Iterator(T),
+        element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
         phase: Phase,
 
         const Phase = enum {
@@ -264,6 +267,7 @@ fn ListShrinkContext(comptime T: type) type {
             RemoveFromEnd, // Remove chunks from end (binary search)
             RemoveFromStart, // Remove chunks from start (binary search)
             RemoveOneAt, // Remove single element at each position
+            ShrinkElements,
             Done,
         };
     };
@@ -346,8 +350,8 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                     },
                     .RemoveOneAt => {
                         if (context.remove_pos >= context.original.len or context.original.len <= @max(1, context.min_len)) {
-                            context.phase = .Done;
-                            return null;
+                            context.phase = .ShrinkElements;
+                            continue;
                         }
 
                         const new_len = context.original.len - 1;
@@ -366,6 +370,24 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
 
                         return shrunken;
                     },
+                    .ShrinkElements => {
+                        const shrinker = context.element_shrinker orelse return null;
+                        while (context.element_idx < context.original.len) {
+                            if (context.element_iterator == null) {
+                                context.element_iterator = shrinker(context.allocator, context.original[context.element_idx]);
+                            }
+                            if (context.element_iterator.?.next()) |element| {
+                                const shrunken = context.allocator.dupe(T, context.original) catch return null;
+                                shrunken[context.element_idx] = element;
+                                return shrunken;
+                            }
+                            context.element_iterator.?.deinit();
+                            context.element_iterator = null;
+                            context.element_idx += 1;
+                        }
+                        context.phase = .Done;
+                        return null;
+                    },
                     .Done => return null,
                 }
             }
@@ -377,16 +399,25 @@ fn makeListShrinkDeinit(comptime T: type) *const fn (*anyopaque) void {
     return struct {
         fn deinitFn(ctx: *anyopaque) void {
             const context: *ListShrinkContext(T) = @ptrCast(@alignCast(ctx));
+            if (context.element_iterator) |*it| it.deinit();
             context.allocator.destroy(context);
         }
     }.deinitFn;
 }
 
 pub fn list(comptime T: type, allocator: std.mem.Allocator, value: []const T) Iterator([]const T) {
-    return listAtLeast(T, allocator, value, 0);
+    return listAtLeast(T, allocator, value, 0, null);
 }
 
-pub fn listAtLeast(comptime T: type, allocator: std.mem.Allocator, value: []const T, min_len: usize) Iterator([]const T) {
+/// Shrink a list while retaining min_len, then optionally shrink each element.
+/// Retained elements must not own allocations because candidates copy them.
+pub fn listAtLeast(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    value: []const T,
+    min_len: usize,
+    element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
+) Iterator([]const T) {
     const Context = ListShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator([]const T).empty();
 
@@ -397,7 +428,10 @@ pub fn listAtLeast(comptime T: type, allocator: std.mem.Allocator, value: []cons
         .current_len = value.len,
         .remove_count = value.len / 2,
         .remove_pos = 0,
-        .phase = if (value.len <= min_len) .Done else .TryEmpty,
+        .element_idx = 0,
+        .element_iterator = null,
+        .element_shrinker = element_shrinker,
+        .phase = if (value.len <= min_len) .ShrinkElements else .TryEmpty,
     };
 
     return .{
@@ -981,6 +1015,50 @@ test "regression: float shrinker returns no candidates for non-finite inputs" {
         defer it_neg.deinit();
         try testing.expectEqual(@as(?f64, null), it_neg.next());
     }
+}
+
+test "list element shrinking follows removals and preserves other elements" {
+    const original = [_]i32{ 100, 50 };
+    for ([_]usize{ 0, original.len }) |min_len| {
+        var it = listAtLeast(i32, testing.allocator, &original, min_len, intShrinker(i32));
+        defer it.deinit();
+        var saw_removal = false;
+        var saw_elements = [_]bool{ false, false };
+        while (it.next()) |candidate| {
+            defer testing.allocator.free(candidate);
+            try testing.expect(candidate.len >= min_len);
+            if (candidate.len < original.len) {
+                try testing.expect(!saw_elements[0] and !saw_elements[1]);
+                saw_removal = true;
+                continue;
+            }
+            var changed: usize = 0;
+            for (candidate, original, 0..) |value, previous, i| {
+                if (value != previous) {
+                    try testing.expect(value >= 0 and value < previous);
+                    saw_elements[i] = true;
+                    changed += 1;
+                }
+            }
+            try testing.expectEqual(@as(usize, 1), changed);
+        }
+        try testing.expectEqual(min_len == 0, saw_removal);
+        try testing.expect(saw_elements[0] and saw_elements[1]);
+        try testing.expectEqualSlices(i32, &.{ 100, 50 }, &original);
+    }
+}
+
+test "list element shrinking handles empty lists and early iterator cleanup" {
+    var empty = listAtLeast(i32, testing.allocator, &.{}, 0, intShrinker(i32));
+    defer empty.deinit();
+    try testing.expect(empty.next() == null);
+
+    var it = listAtLeast(i32, testing.allocator, &.{1}, 1, intShrinker(i32));
+    defer it.deinit();
+    const candidate = it.next().?;
+    defer testing.allocator.free(candidate);
+    try testing.expectEqualSlices(i32, &.{0}, candidate);
+    // Leave the element iterator active to verify that deinit releases it.
 }
 
 test "regression: integer shrinking tries the target and handles extreme bounds" {
