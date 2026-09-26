@@ -94,14 +94,9 @@ pub fn check(
                 var it = shrinker(allocator, minimal_value);
                 defer it.deinit();
 
-                while (it.next()) |next_val| {
+                while (shrink_attempts < options.max_shrink_attempts) {
+                    const next_val = it.next() orelse break;
                     shrink_attempts += 1;
-
-                    // Limit shrink attempts
-                    if (shrink_attempts >= options.max_shrink_attempts) {
-                        std.debug.print("\nMax shrink attempts ({d}) reached.\n", .{options.max_shrink_attempts});
-                        break;
-                    }
 
                     // Progress indicator
                     if (shrink_attempts % 50 == 0) {
@@ -349,4 +344,36 @@ test "regression: auto seed produces deterministic run with fixed seed" {
     try check(allocator, int_gen, collect2.prop, .{ .num_runs = 10, .seed = 77777 });
 
     try testing.expectEqualSlices(u16, values1.items, values2.items);
+}
+
+test "regression: shrink budget evaluates exactly the allowed candidates without leaks" {
+    const Property = struct {
+        var calls: usize = 0;
+        fn checkValue(s: []const u8) !void {
+            calls += 1;
+            if (s.len == 4) return error.PropertyFailed;
+        }
+    };
+    const Fixed = struct {
+        fn generate(tc: *TestCase) core.GenError![]const u8 {
+            return tc.allocator.dupe(u8, "abcd");
+        }
+        fn free(allocator: Allocator, value: []const u8) void {
+            allocator.free(value);
+        }
+    };
+    const generator = gen.Generator([]const u8){
+        .generateFn = Fixed.generate,
+        .shrinkFn = shrink_mod.stringShrinker(),
+        .freeFn = Fixed.free,
+    };
+    for ([_]u32{ 0, 1, 2, 3 }) |budget| {
+        Property.calls = 0;
+        try testing.expectError(error.PropertyFailed, check(testing.allocator, generator, Property.checkValue, .{
+            .seed = 1,
+            .num_runs = 1,
+            .max_shrink_attempts = budget,
+        }));
+        try testing.expectEqual(@as(usize, budget) + 1, Property.calls);
+    }
 }

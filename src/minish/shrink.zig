@@ -81,28 +81,20 @@ fn makeIntShrinkNext(comptime T: type) *const fn (*anyopaque) ?T {
             // So the previous value is our new "safe" bound.
             // UNLESS this is the very first call (indicated by first_call flag).
 
-            if (!context.first_call) {
-                context.current_bound = context.last_tried;
+            if (context.first_call) {
+                context.first_call = false;
+                if (context.current_bound == context.failing_bound) return null;
+                return context.current_bound;
             }
-            context.first_call = false;
+            context.current_bound = context.last_tried;
 
-            // We search between current_bound (safe) and failing_bound (known failure).
-            // Calculate mid point.
-
-            // Check if bounds are adjacent or same
-            const dist = if (context.failing_bound > context.current_bound)
-                context.failing_bound - context.current_bound
-            else
-                context.current_bound - context.failing_bound;
-
-            if (dist < 2) return null;
-
-            const half_dist = @divTrunc(dist, 2);
-
-            const next_val = if (context.failing_bound > context.current_bound)
-                context.current_bound + half_dist
-            else
-                context.current_bound - half_dist;
+            // Widen before subtracting so both signed extremes fit.
+            const Wide = std.meta.Int(.signed, @typeInfo(T).int.bits + 1);
+            const current: Wide = context.current_bound;
+            const failing: Wide = context.failing_bound;
+            const delta = failing - current;
+            if (delta >= -1 and delta <= 1) return null;
+            const next_val: T = @intCast(current + @divTrunc(delta, 2));
 
             // If we generated the same value again (due to truncation), stop.
             if (next_val == context.current_bound or next_val == context.failing_bound) return null;
@@ -261,6 +253,7 @@ fn ListShrinkContext(comptime T: type) type {
     return struct {
         allocator: std.mem.Allocator,
         original: []const T,
+        min_len: usize,
         current_len: usize,
         remove_count: usize,
         remove_pos: usize,
@@ -288,6 +281,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                 switch (context.phase) {
                     .TryEmpty => {
                         context.phase = .RemoveFromEnd;
+                        if (context.min_len > 0) continue;
                         // Return empty list as first shrink attempt
                         const shrunken = context.allocator.alloc(T, 0) catch return null;
                         return shrunken;
@@ -307,7 +301,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         }
 
                         const new_len = context.current_len - context.remove_count;
-                        if (new_len == 0) {
+                        if (new_len == 0 or new_len < context.min_len) {
                             context.remove_count /= 2;
                             continue;
                         }
@@ -336,7 +330,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         }
 
                         const new_len = context.current_len - context.remove_count;
-                        if (new_len == 0) {
+                        if (new_len == 0 or new_len < context.min_len) {
                             context.remove_count /= 2;
                             continue;
                         }
@@ -351,7 +345,7 @@ fn makeListShrinkNext(comptime T: type) *const fn (*anyopaque) ?[]const T {
                         return shrunken;
                     },
                     .RemoveOneAt => {
-                        if (context.remove_pos >= context.original.len or context.original.len <= 1) {
+                        if (context.remove_pos >= context.original.len or context.original.len <= @max(1, context.min_len)) {
                             context.phase = .Done;
                             return null;
                         }
@@ -389,16 +383,21 @@ fn makeListShrinkDeinit(comptime T: type) *const fn (*anyopaque) void {
 }
 
 pub fn list(comptime T: type, allocator: std.mem.Allocator, value: []const T) Iterator([]const T) {
+    return listAtLeast(T, allocator, value, 0);
+}
+
+pub fn listAtLeast(comptime T: type, allocator: std.mem.Allocator, value: []const T, min_len: usize) Iterator([]const T) {
     const Context = ListShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator([]const T).empty();
 
     context.* = .{
         .allocator = allocator,
         .original = value,
+        .min_len = min_len,
         .current_len = value.len,
         .remove_count = value.len / 2,
         .remove_pos = 0,
-        .phase = if (value.len == 0) .Done else .TryEmpty,
+        .phase = if (value.len <= min_len) .Done else .TryEmpty,
     };
 
     return .{
@@ -982,4 +981,33 @@ test "regression: float shrinker returns no candidates for non-finite inputs" {
         defer it_neg.deinit();
         try testing.expectEqual(@as(?f64, null), it_neg.next());
     }
+}
+
+test "regression: integer shrinking tries the target and handles extreme bounds" {
+    inline for (.{ i8, i64, u64 }) |T| {
+        var it = int(T, testing.allocator, std.math.maxInt(T));
+        defer it.deinit();
+        try testing.expectEqual(@as(?T, 0), it.next());
+        try testing.expect(it.next().? > 0);
+    }
+    inline for (.{ i8, i64 }) |T| {
+        var it = int(T, testing.allocator, std.math.minInt(T));
+        defer it.deinit();
+        try testing.expectEqual(@as(?T, 0), it.next());
+        try testing.expectEqual(@as(?T, @divTrunc(std.math.minInt(T), 2)), it.next());
+
+        var opposite = intTowards(T, testing.allocator, std.math.minInt(T), std.math.maxInt(T));
+        defer opposite.deinit();
+        try testing.expectEqual(@as(?T, std.math.maxInt(T)), opposite.next());
+        try testing.expectEqual(@as(?T, 0), opposite.next());
+    }
+    for ([_]i32{ -1, 1 }) |value| {
+        var it = int(i32, testing.allocator, value);
+        defer it.deinit();
+        try testing.expectEqual(@as(?i32, 0), it.next());
+        try testing.expectEqual(@as(?i32, null), it.next());
+    }
+    var zero = int(i32, testing.allocator, 0);
+    defer zero.deinit();
+    try testing.expectEqual(@as(?i32, null), zero.next());
 }

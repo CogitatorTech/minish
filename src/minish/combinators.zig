@@ -275,15 +275,14 @@ pub fn dependent(
     const DependentGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!struct { T, U } {
             const first_val = try first_gen.generateFn(tc);
+            errdefer if (first_gen.freeFn) |freeFn| freeFn(tc.allocator, first_val);
             const second_gen = make_gen(first_val);
             const second_val = try second_gen.generateFn(tc);
             return .{ first_val, second_val };
         }
 
         fn free(allocator: std.mem.Allocator, value: struct { T, U }) void {
-            if (first_gen.freeFn) |freeFn| {
-                freeFn(allocator, value[0]);
-            }
+            defer if (first_gen.freeFn) |freeFn| freeFn(allocator, value[0]);
             // For the dependent value, we need to regenerate the generator to access its freeFn.
             // Ideally core.Generator would be uniform, but here make_gen is a function.
             const second_gen = make_gen(value[0]);
@@ -571,4 +570,38 @@ test "regression: flatMap frees base value when inner generator fails" {
     const result = flat_gen.generateFn(&tc);
     try std.testing.expectError(core.GenError.InvalidChoice, result);
     // testing.allocator's leak check covers the base string.
+}
+
+test "regression: dependent frees its first value on inner failure" {
+    const F = struct {
+        fn fail(_: *TestCase) core.GenError!u8 {
+            return error.InvalidChoice;
+        }
+        fn make(_: []const u8) Generator(u8) {
+            return .{ .generateFn = fail, .freeFn = null, .shrinkFn = null };
+        }
+    };
+    const g = dependent([]const u8, u8, gen.string(.{ .min_len = 1, .max_len = 1 }), F.make);
+    var tc = TestCase.init(std.testing.allocator, 1);
+    defer tc.deinit();
+    try std.testing.expectError(error.InvalidChoice, g.generateFn(&tc));
+}
+
+test "regression: dependent keeps its first value alive during cleanup" {
+    const F = struct {
+        fn make(s: []const u8) Generator([]const u8) {
+            std.debug.assert(s[0] == 'a');
+            return gen.string(.{ .min_len = 1, .max_len = 1 });
+        }
+    };
+    const g = dependent([]const u8, []const u8, gen.string(.{
+        .min_len = 1,
+        .max_len = 1,
+        .charset = .custom,
+        .custom_chars = "a",
+    }), F.make);
+    var tc = TestCase.init(std.testing.allocator, 1);
+    defer tc.deinit();
+    const value = try g.generateFn(&tc);
+    g.freeFn.?(std.testing.allocator, value);
 }

@@ -89,8 +89,12 @@ pub fn intRange(comptime T: type, comptime min: T, comptime max: T) Generator(T)
         fn generate(tc: *TestCase) core.GenError!T {
             return tc.choiceInRange(T, min, max);
         }
+
+        fn shrink(allocator: std.mem.Allocator, value: T) shrink_mod.Iterator(T) {
+            return shrink_mod.intTowards(T, allocator, value, std.math.clamp(@as(T, 0), min, max));
+        }
     };
-    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = shrink_mod.intShrinker(T), .freeFn = null };
+    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = RangeGenerator.shrink, .freeFn = null };
 }
 
 // ============================================================================
@@ -143,10 +147,19 @@ pub fn floatRange(comptime T: type, comptime min: T, comptime max: T) Generator(
             // Generate a value in [0, 1] and scale to range
             const mantissa = try tc.choice(std.math.maxInt(u32));
             const normalized: T = @as(T, @floatFromInt(mantissa)) / @as(T, @floatFromInt(std.math.maxInt(u32)));
-            return min + normalized * (max - min);
+            // Opposite signs can overflow the range width even with finite bounds.
+            const value = if (min < 0 and max > 0)
+                (1 - normalized) * min + normalized * max
+            else
+                min + normalized * (max - min);
+            return std.math.clamp(value, min, max);
+        }
+
+        fn shrink(allocator: std.mem.Allocator, value: T) shrink_mod.Iterator(T) {
+            return shrink_mod.floatTowards(T, allocator, value, std.math.clamp(@as(T, 0), min, max));
         }
     };
-    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = shrink_mod.floatShrinker(T), .freeFn = null };
+    return .{ .generateFn = RangeGenerator.generate, .shrinkFn = RangeGenerator.shrink, .freeFn = null };
 }
 
 // ============================================================================
@@ -167,13 +180,7 @@ pub fn boolean() Generator(bool) {
 
 /// Generate a single ASCII character (printable range 32-126).
 pub fn char() Generator(u8) {
-    const CharGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!u8 {
-            const val = try tc.choice(94); // 126 - 32 = 94 characters
-            return @intCast(32 + val); // Start from space (32)
-        }
-    };
-    return .{ .generateFn = CharGenerator.generate, .shrinkFn = shrink_mod.intShrinker(u8), .freeFn = null };
+    return intRange(u8, 32, 126);
 }
 
 /// Generate a single character from a specific character set.
@@ -275,17 +282,7 @@ pub fn timestamp() Generator(i64) {
 
 /// Generate Unix timestamps in a specific range.
 pub fn timestampRange(comptime min: i64, comptime max: i64) Generator(i64) {
-    comptime {
-        if (max < min) @compileError("timestampRange: max must be >= min");
-    }
-    const TimestampGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!i64 {
-            const range: u64 = @intCast(max - min);
-            const offset = try tc.choice(range);
-            return min + @as(i64, @intCast(offset));
-        }
-    };
-    return .{ .generateFn = TimestampGenerator.generate, .shrinkFn = shrink_mod.intShrinker(i64), .freeFn = null };
+    return intRange(i64, min, max);
 }
 
 // ============================================================================
@@ -377,11 +374,15 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
             return result.toOwnedSlice(tc.allocator);
         }
 
+        fn shrink(allocator: std.mem.Allocator, value: []const u8) shrink_mod.Iterator([]const u8) {
+            return shrink_mod.listAtLeast(u8, allocator, value, config.min_len);
+        }
+
         fn free(allocator: std.mem.Allocator, value: []const u8) void {
             allocator.free(value);
         }
     };
-    return .{ .generateFn = StringGenerator.generate, .shrinkFn = shrink_mod.stringShrinker(), .freeFn = StringGenerator.free };
+    return .{ .generateFn = StringGenerator.generate, .shrinkFn = StringGenerator.shrink, .freeFn = StringGenerator.free };
 }
 
 // ============================================================================
@@ -389,6 +390,8 @@ pub fn string(comptime config: StringConfig) Generator([]const u8) {
 // ============================================================================
 
 /// Generate a list of values.
+/// Automatic shrinking is available only when the element generator has no freeFn.
+/// Shrunk lists retain the configured minimum length.
 ///
 /// Example:
 /// ```zig
@@ -424,6 +427,10 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
             return result.toOwnedSlice(tc.allocator);
         }
 
+        fn shrink(allocator: std.mem.Allocator, value: []const T) shrink_mod.Iterator([]const T) {
+            return shrink_mod.listAtLeast(T, allocator, value, min_len);
+        }
+
         fn free(allocator: std.mem.Allocator, value: []const T) void {
             if (element_gen.freeFn) |freeFn| {
                 for (value) |item| {
@@ -433,7 +440,9 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
             allocator.free(value);
         }
     };
-    return .{ .generateFn = ListGenerator.generate, .shrinkFn = shrink_mod.listShrinker(T), .freeFn = ListGenerator.free };
+    // ponytail: owned elements have no clone operation; enable shrinking when
+    // generators can produce independently owned copies of retained elements.
+    return .{ .generateFn = ListGenerator.generate, .shrinkFn = if (element_gen.freeFn == null) ListGenerator.shrink else null, .freeFn = ListGenerator.free };
 }
 
 // ============================================================================
@@ -1290,4 +1299,90 @@ test "regression: hashMap with collisions does not leak duplicate keys/values" {
     var map = try map_gen.generateFn(&tc);
     defer map_gen.freeFn.?(allocator, map);
     try testing.expect(map.count() <= 2);
+}
+
+test "regression: nested lists retain ownership when properties fail" {
+    const runner = @import("runner.zig");
+    const g = list([]const u8, string(.{ .min_len = 1, .max_len = 1 }), 2, 2);
+    try testing.expect(g.shrinkFn == null);
+    const Property = struct {
+        fn checkValue(_: []const []const u8) !void {
+            return error.PropertyFailed;
+        }
+    };
+    try testing.expectError(error.PropertyFailed, runner.check(testing.allocator, g, Property.checkValue, .{
+        .seed = 1,
+        .num_runs = 1,
+    }));
+    try testing.expect(list(i32, int(i32), 0, 10).shrinkFn != null);
+}
+
+test "regression: constrained generators preserve bounds while shrinking" {
+    inline for (.{ .{ 10, 100 }, .{ -100, -10 }, .{ -10, 10 }, .{ 10, 10 } }) |bounds| {
+        const g = intRange(i32, bounds[0], bounds[1]);
+        inline for (.{ bounds[0], bounds[1] }) |value| {
+            var it = g.shrinkFn.?(testing.allocator, value);
+            defer it.deinit();
+            while (it.next()) |candidate| {
+                try testing.expect(candidate >= bounds[0] and candidate <= bounds[1]);
+            }
+        }
+        const f = floatRange(f64, bounds[0], bounds[1]);
+        var it = f.shrinkFn.?(testing.allocator, bounds[0]);
+        defer it.deinit();
+        while (it.next()) |candidate| {
+            try testing.expect(candidate >= bounds[0] and candidate <= bounds[1]);
+        }
+    }
+    var chars = char().shrinkFn.?(testing.allocator, 126);
+    defer chars.deinit();
+    while (chars.next()) |candidate| try testing.expect(candidate >= 32 and candidate <= 126);
+
+    var timestamps = timestampRange(100, 200).shrinkFn.?(testing.allocator, 200);
+    defer timestamps.deinit();
+    while (timestamps.next()) |candidate| try testing.expect(candidate >= 100 and candidate <= 200);
+
+    inline for (.{ string(.{ .min_len = 3 }), list(u8, int(u8), 3, 10) }) |g| {
+        var it = g.shrinkFn.?(testing.allocator, "abcdef");
+        defer it.deinit();
+        var count: usize = 0;
+        while (it.next()) |candidate| {
+            defer g.freeFn.?(testing.allocator, candidate);
+            try testing.expect(candidate.len >= 3 and candidate.len < 6);
+            count += 1;
+        }
+        try testing.expect(count > 0);
+        var minimum = g.shrinkFn.?(testing.allocator, "abc");
+        defer minimum.deinit();
+        try testing.expect(minimum.next() == null);
+    }
+}
+
+test "regression: finite float ranges do not overflow" {
+    inline for (.{ f32, f64 }) |T| {
+        const bound = std.math.floatMax(T);
+        const g = floatRange(T, -bound, bound);
+        for ([_]u64{ 0, std.math.maxInt(u32) / 2, std.math.maxInt(u32) }) |choice| {
+            var tc = TestCase.init(testing.allocator, 1);
+            defer tc.deinit();
+            tc.prefix = &.{choice};
+            const value = try g.generateFn(&tc);
+            try testing.expect(std.math.isFinite(value));
+            try testing.expect(value >= -bound and value <= bound);
+            if (choice == 0) try testing.expectEqual(-bound, value);
+            if (choice == std.math.maxInt(u32)) try testing.expectEqual(bound, value);
+        }
+    }
+}
+
+test "regression: timestamps support the full signed range" {
+    const g = timestampRange(std.math.minInt(i64), std.math.maxInt(i64));
+    for ([_]u64{ 0, std.math.maxInt(u64) }) |choice| {
+        var tc = TestCase.init(testing.allocator, 1);
+        defer tc.deinit();
+        tc.prefix = &.{choice};
+        const value = try g.generateFn(&tc);
+        const expected: i64 = if (choice == 0) std.math.minInt(i64) else std.math.maxInt(i64);
+        try testing.expectEqual(expected, value);
+    }
 }
