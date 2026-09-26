@@ -90,6 +90,10 @@ pub fn check(
                 std.debug.print("Shrinking", .{});
                 var minimal_value = value;
                 var minimal_is_original = true;
+                // Register value cleanup first so the iterator closes before it is freed.
+                defer if (!minimal_is_original) {
+                    if (generator.freeFn) |freeFn| freeFn(allocator, minimal_value);
+                };
                 var shrink_attempts: u32 = 0;
                 var it = shrinker(allocator, minimal_value);
                 defer it.deinit();
@@ -124,12 +128,6 @@ pub fn check(
                 }
                 std.debug.print("\nMinimal failing input: {any}\n", .{minimal_value});
                 std.debug.print("Shrink attempts: {d}\n", .{shrink_attempts});
-
-                if (!minimal_is_original) {
-                    if (generator.freeFn) |freeFn| {
-                        freeFn(allocator, minimal_value);
-                    }
-                }
             }
             return err;
         };
@@ -375,5 +373,47 @@ test "regression: shrink budget evaluates exactly the allowed candidates without
             .max_shrink_attempts = budget,
         }));
         try testing.expectEqual(@as(usize, budget) + 1, Property.calls);
+    }
+}
+
+test "regression: runner closes borrowing iterators before freeing their values" {
+    const Borrowing = struct {
+        allocator: Allocator,
+        value: []const u8,
+        done: bool = false,
+
+        fn generate(tc: *TestCase) core.GenError![]const u8 {
+            return tc.allocator.dupe(u8, "xxx");
+        }
+        fn shrink(allocator: Allocator, value: []const u8) shrink_mod.Iterator([]const u8) {
+            const context = allocator.create(@This()) catch return shrink_mod.Iterator([]const u8).empty();
+            context.* = .{ .allocator = allocator, .value = value };
+            return .{ .context = context, .nextFn = next, .deinitFn = deinit };
+        }
+        fn next(ctx: *anyopaque) ?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (self.done or self.value.len <= 1) return null;
+            self.done = true;
+            return self.allocator.dupe(u8, self.value[0 .. self.value.len - 1]) catch null;
+        }
+        fn deinit(ctx: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            std.debug.assert(self.value[0] == 'x');
+            self.allocator.destroy(self);
+        }
+        fn free(allocator: Allocator, value: []const u8) void {
+            allocator.free(value);
+        }
+        fn property(_: []const u8) !void {
+            return error.PropertyFailed;
+        }
+    };
+    const g = gen.Generator([]const u8){ .generateFn = Borrowing.generate, .shrinkFn = Borrowing.shrink, .freeFn = Borrowing.free };
+    for ([_]u32{ 1, 1000 }) |budget| {
+        try testing.expectError(error.PropertyFailed, check(testing.allocator, g, Borrowing.property, .{
+            .seed = 1,
+            .num_runs = 1,
+            .max_shrink_attempts = budget,
+        }));
     }
 }

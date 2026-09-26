@@ -173,7 +173,10 @@ You can find the API documentation for the latest release of Minish [here](https
 > List shrinking tries removing elements first, then uses the element generator's
 > shrinker to simplify individual values without changing the list length.
 > Strings and nested lists shrink with independently owned copies of retained elements.
-> Custom generators with a `freeFn` must also provide a `cloneFn` to enable list shrinking.
+> Structs shrink one field at a time using each field generator's shrinker. Unchanged
+> owned fields are cloned, and fields without a shrinker retain their values.
+> Custom generators with a `freeFn` must also provide a `cloneFn` to enable shrinking
+> when used as list elements or struct fields.
 > A clone must use the supplied allocator, support the same `freeFn`, and release any
 > partial allocations if cloning fails. `cloneFn` defaults to `null`, so existing custom
 > generators keep their current behavior until they supply a clone function.

@@ -693,8 +693,9 @@ pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime 
 /// });
 /// ```
 ///
-/// Memory lifecycle: The returned struct and its fields are owned by the Minish runner
+/// Memory lifecycle-wise, the returned struct and its fields are owned by the Minish runner
 /// and will be freed automatically.
+/// Fields shrink independently when every owned field has a cloneFn.
 pub fn structure(
     comptime T: type,
     comptime field_gens: anytype,
@@ -703,6 +704,19 @@ pub fn structure(
     if (type_info != .@"struct") {
         @compileError("structure() requires a struct type");
     }
+    const can_clone = comptime blk: {
+        for (type_info.@"struct".fields) |field| {
+            const field_gen = @field(field_gens, field.name);
+            if (field_gen.freeFn != null and field_gen.cloneFn == null) break :blk false;
+        }
+        break :blk true;
+    };
+    const has_shrinker = comptime blk: {
+        for (type_info.@"struct".fields) |field| {
+            if (@field(field_gens, field.name).shrinkFn != null) break :blk true;
+        }
+        break :blk false;
+    };
     const StructGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!T {
             var result: T = undefined;
@@ -740,8 +754,21 @@ pub fn structure(
                 }
             }
         }
+
+        fn shrink(allocator: std.mem.Allocator, value: T) shrink_mod.Iterator(T) {
+            return shrink_mod.structure(T, allocator, value, field_gens);
+        }
+
+        fn clone(allocator: std.mem.Allocator, value: T) std.mem.Allocator.Error!T {
+            return shrink_mod.cloneStruct(T, allocator, value, field_gens);
+        }
     };
-    return .{ .generateFn = StructGenerator.generate, .shrinkFn = null, .freeFn = StructGenerator.free };
+    return .{
+        .generateFn = StructGenerator.generate,
+        .shrinkFn = if (can_clone and has_shrinker) StructGenerator.shrink else null,
+        .freeFn = StructGenerator.free,
+        .cloneFn = if (can_clone) StructGenerator.clone else null,
+    };
 }
 
 // ============================================================================
@@ -1425,6 +1452,153 @@ test "nested list cloning cleans up partial allocation failures" {
         }
     };
     try testing.checkAllAllocationFailures(testing.allocator, Test.run, .{});
+}
+
+test "struct shrinking changes one field and copies unchanged owned fields" {
+    const S = struct { id: i32, name: []const u8, enabled: bool };
+    const g = comptime structure(S, .{
+        .id = intRange(i32, 10, 100),
+        .name = string(.{ .min_len = 1 }),
+        .enabled = boolean(),
+    });
+    const original = try g.cloneFn.?(testing.allocator, .{ .id = 100, .name = "abcd", .enabled = true });
+    defer g.freeFn.?(testing.allocator, original);
+    const copy = try g.cloneFn.?(testing.allocator, original);
+    @constCast(copy.name)[0] = 'z';
+    try testing.expectEqualStrings("abcd", original.name);
+    g.freeFn.?(testing.allocator, copy);
+
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    var saw_id = false;
+    var saw_name = false;
+    while (it.next()) |candidate| {
+        defer g.freeFn.?(testing.allocator, candidate);
+        try testing.expect(candidate.enabled);
+        try testing.expect(candidate.name.ptr != original.name.ptr);
+        try testing.expect(candidate.id >= 10 and candidate.id <= 100);
+        try testing.expect(candidate.name.len >= 1);
+        if (candidate.id != original.id) {
+            try testing.expect(!saw_name);
+            try testing.expectEqualStrings(original.name, candidate.name);
+            saw_id = true;
+        } else {
+            try testing.expect(candidate.name.len < original.name.len);
+            saw_name = true;
+        }
+    }
+    try testing.expect(saw_id and saw_name);
+    try testing.expectEqualStrings("abcd", original.name);
+
+    const outer = list(S, g, 1, 2);
+    const items = try outer.cloneFn.?(testing.allocator, &.{ original, original });
+    defer outer.freeFn.?(testing.allocator, items);
+    var lists = outer.shrinkFn.?(testing.allocator, items);
+    defer lists.deinit();
+    while (lists.next()) |candidate| {
+        defer outer.freeFn.?(testing.allocator, candidate);
+        for (candidate) |item| try testing.expect(item.name.ptr != original.name.ptr);
+    }
+}
+
+test "struct shrinking minimizes integer and string fields through the runner" {
+    const runner = @import("runner.zig");
+    const S = struct { id: i32, name: []const u8, enabled: bool };
+    const Strings = struct {
+        fn generate(tc: *TestCase) core.GenError![]const u8 {
+            return tc.allocator.dupe(u8, "xxxx");
+        }
+    };
+    const g = structure(S, .{
+        .id = Generator(i32){
+            .generateFn = constant(@as(i32, 100)).generateFn,
+            .shrinkFn = int(i32).shrinkFn,
+            .freeFn = null,
+        },
+        .name = Generator([]const u8){
+            .generateFn = Strings.generate,
+            .shrinkFn = string(.{ .min_len = 1 }).shrinkFn,
+            .freeFn = string(.{}).freeFn,
+            .cloneFn = string(.{}).cloneFn,
+        },
+        .enabled = constant(true),
+    });
+    const Property = struct {
+        var last_id: i32 = undefined;
+        var last_name_len: usize = undefined;
+        var passing_candidates: usize = 0;
+        fn checkValue(value: S) !void {
+            try testing.expect(value.enabled and value.name.len >= 1);
+            if (value.id > 8 or value.name.len > 2) {
+                last_id = value.id;
+                last_name_len = value.name.len;
+                return error.PropertyFailed;
+            }
+            passing_candidates += 1;
+        }
+    };
+    for ([_]u32{ 0, 1, 1000 }) |budget| {
+        Property.passing_candidates = 0;
+        try testing.expectError(error.PropertyFailed, runner.check(testing.allocator, g, Property.checkValue, .{
+            .seed = 1,
+            .num_runs = 1,
+            .max_shrink_attempts = budget,
+        }));
+    }
+    try testing.expectEqual(@as(i32, 0), Property.last_id);
+    try testing.expectEqual(@as(usize, 3), Property.last_name_len);
+    try testing.expect(Property.passing_candidates > 0);
+}
+
+test "struct cloning supports nested structs and partial allocation failures" {
+    const Inner = struct { name: []const u8, count: i32 };
+    const Outer = struct { inner: Inner, label: []const u8 };
+    const g = comptime structure(Outer, .{
+        .inner = structure(Inner, .{ .name = string(.{}), .count = int(i32) }),
+        .label = string(.{}),
+    });
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            const copy = try g.cloneFn.?(allocator, .{ .inner = .{ .name = "abcd", .count = 100 }, .label = "efgh" });
+            defer g.freeFn.?(allocator, copy);
+            try testing.expectEqualStrings("abcd", copy.inner.name);
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Test.run, .{});
+    const original = try g.cloneFn.?(testing.allocator, .{ .inner = .{ .name = "abcd", .count = 100 }, .label = "efgh" });
+    defer g.freeFn.?(testing.allocator, original);
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    var saw_nested_field = false;
+    while (it.next()) |candidate| {
+        defer g.freeFn.?(testing.allocator, candidate);
+        try testing.expect(candidate.inner.name.ptr != original.inner.name.ptr);
+        try testing.expect(candidate.label.ptr != original.label.ptr);
+        if (candidate.inner.count != original.inner.count) saw_nested_field = true;
+    }
+    try testing.expect(saw_nested_field);
+}
+
+test "struct generators handle empty structs and fields without clone support" {
+    const empty = structure(struct {}, .{});
+    try testing.expect(empty.shrinkFn == null);
+    var tc = TestCase.init(testing.allocator, 1);
+    defer tc.deinit();
+    _ = try empty.generateFn(&tc);
+    _ = try empty.cloneFn.?(testing.allocator, .{});
+
+    const S = struct { id: i32, name: []const u8 };
+    const uncloneable = structure(S, .{
+        .id = int(i32),
+        .name = Generator([]const u8){
+            .generateFn = string(.{ .min_len = 1, .max_len = 1 }).generateFn,
+            .shrinkFn = string(.{}).shrinkFn,
+            .freeFn = string(.{}).freeFn,
+        },
+    });
+    try testing.expect(uncloneable.shrinkFn == null and uncloneable.cloneFn == null);
+    const value = try uncloneable.generateFn(&tc);
+    uncloneable.freeFn.?(testing.allocator, value);
 }
 
 test "regression: constrained generators preserve bounds while shrinking" {

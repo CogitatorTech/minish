@@ -810,6 +810,92 @@ pub fn tuple2IntShrinker(comptime T1: type, comptime T2: type) *const fn (std.me
 }
 
 // ============================================================================
+// Struct Shrinking
+// ============================================================================
+
+/// Shrink one field at a time and independently clone unchanged owned fields.
+pub fn structure(comptime T: type, allocator: std.mem.Allocator, value: T, comptime field_gens: anytype) Iterator(T) {
+    const fields = @typeInfo(T).@"struct".fields;
+    const Iterators = comptime blk: {
+        var types: [fields.len]type = undefined;
+        for (fields, 0..) |field, i| types[i] = ?Iterator(field.type);
+        break :blk std.meta.Tuple(&types);
+    };
+    const Context = struct {
+        allocator: std.mem.Allocator,
+        original: T,
+        field_idx: usize = 0,
+        iterators: Iterators,
+
+        fn next(ctx: *anyopaque) ?T {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            inline for (fields, 0..) |field, i| {
+                if (self.field_idx == i) {
+                    const field_gen = @field(field_gens, field.name);
+                    if (field_gen.shrinkFn) |shrinker| {
+                        if (self.iterators[i] == null) {
+                            self.iterators[i] = shrinker(self.allocator, @field(self.original, field.name));
+                        }
+                        if (self.iterators[i].?.next()) |shrunk| {
+                            var result = self.original;
+                            @field(result, field.name) = shrunk;
+                            cloneFields(T, self.allocator, &result, field_gens, i) catch {
+                                if (field_gen.freeFn) |free| free(self.allocator, shrunk);
+                                return null;
+                            };
+                            return result;
+                        }
+                        self.iterators[i].?.deinit();
+                        self.iterators[i] = null;
+                    }
+                    self.field_idx += 1;
+                }
+            }
+            return null;
+        }
+
+        fn deinit(ctx: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            inline for (fields, 0..) |_, i| {
+                if (self.iterators[i]) |*it| it.deinit();
+            }
+            self.allocator.destroy(self);
+        }
+    };
+    const context = allocator.create(Context) catch return Iterator(T).empty();
+    context.* = .{ .allocator = allocator, .original = value, .iterators = undefined };
+    inline for (fields, 0..) |_, i| context.iterators[i] = null;
+    return .{ .context = context, .nextFn = Context.next, .deinitFn = Context.deinit };
+}
+
+fn cloneFields(comptime T: type, allocator: std.mem.Allocator, value: *T, comptime field_gens: anytype, skip_idx: ?usize) std.mem.Allocator.Error!void {
+    const fields = @typeInfo(T).@"struct".fields;
+    var copied: usize = 0;
+    errdefer {
+        inline for (fields, 0..) |field, i| {
+            if (i < copied and (skip_idx == null or i != skip_idx.?)) {
+                if (@field(field_gens, field.name).freeFn) |free| free(allocator, @field(value.*, field.name));
+            }
+        }
+    }
+    inline for (fields, 0..) |field, i| {
+        if (skip_idx == null or i != skip_idx.?) {
+            const field_gen = @field(field_gens, field.name);
+            std.debug.assert(field_gen.freeFn == null or field_gen.cloneFn != null);
+            if (field_gen.cloneFn) |clone| @field(value.*, field.name) = try clone(allocator, @field(value.*, field.name));
+        }
+        copied = i + 1;
+    }
+}
+
+/// Copy a struct and independently clone its owned fields.
+pub fn cloneStruct(comptime T: type, allocator: std.mem.Allocator, value: T, comptime field_gens: anytype) std.mem.Allocator.Error!T {
+    var result = value;
+    try cloneFields(T, allocator, &result, field_gens, null);
+    return result;
+}
+
+// ============================================================================
 // Unit Tests
 // ============================================================================
 
@@ -1147,6 +1233,33 @@ test "owned list shrinking cleans up at every allocation failure" {
             try testing.expect(failing.has_induced_failure);
             try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
         }
+    }
+}
+
+test "struct shrinking cleans up at every allocation failure" {
+    const gen = @import("gen.zig");
+    const S = struct { first: []const u8, count: i32, second: []const u8, enabled: bool };
+    const g = comptime gen.structure(S, .{
+        .first = gen.string(.{ .min_len = 1 }),
+        .count = gen.int(i32),
+        .second = gen.string(.{ .min_len = 1 }),
+        .enabled = gen.boolean(),
+    });
+    const Test = struct {
+        fn run(allocator: std.mem.Allocator) void {
+            var it = g.shrinkFn.?(allocator, .{ .first = "abcd", .count = 100, .second = "efgh", .enabled = true });
+            defer it.deinit();
+            while (it.next()) |candidate| g.freeFn.?(allocator, candidate);
+        }
+    };
+    var counter = testing.FailingAllocator.init(testing.allocator, .{});
+    Test.run(counter.allocator());
+    try testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
+    for (0..counter.alloc_index) |fail_index| {
+        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        Test.run(failing.allocator());
+        try testing.expect(failing.has_induced_failure);
+        try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
     }
 }
 
