@@ -545,6 +545,8 @@ fn ArrayShrinkContext(comptime T: type, comptime size: usize) type {
         current_idx: usize,
         element_iterator: ?Iterator(T),
         element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
+        element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+        element_free: ?*const fn (std.mem.Allocator, T) void,
     };
 }
 
@@ -560,6 +562,10 @@ fn makeArrayShrinkNext(comptime T: type, comptime size: usize) *const fn (*anyop
                         // Build new array with shrunk element at current position
                         var result = context.original;
                         result[context.current_idx] = shrunk_elem;
+                        cloneElements(T, context.allocator, &result, context.element_clone, context.element_free, context.current_idx) catch {
+                            if (context.element_free) |free| free(context.allocator, shrunk_elem);
+                            return null;
+                        };
                         return result;
                     } else {
                         // Element iterator exhausted, move to next element
@@ -602,7 +608,21 @@ pub fn array(
     value: [size]T,
     element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
 ) Iterator([size]T) {
-    if (size == 0) return Iterator([size]T).empty();
+    return arrayWithOwnership(T, size, allocator, value, element_shrinker, null, null);
+}
+
+/// Shrink array elements and independently clone unchanged owned elements.
+pub fn arrayWithOwnership(
+    comptime T: type,
+    comptime size: usize,
+    allocator: std.mem.Allocator,
+    value: [size]T,
+    element_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T),
+    element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+    element_free: ?*const fn (std.mem.Allocator, T) void,
+) Iterator([size]T) {
+    if (size == 0 or element_shrinker == null) return Iterator([size]T).empty();
+    std.debug.assert(element_free == null or element_clone != null);
 
     const Context = ArrayShrinkContext(T, size);
     const context = allocator.create(Context) catch return Iterator([size]T).empty();
@@ -613,6 +633,8 @@ pub fn array(
         .current_idx = 0,
         .element_iterator = if (element_shrinker) |s| s(allocator, value[0]) else null,
         .element_shrinker = element_shrinker,
+        .element_clone = element_clone,
+        .element_free = element_free,
     };
 
     return .{
@@ -620,6 +642,21 @@ pub fn array(
         .nextFn = makeArrayShrinkNext(T, size),
         .deinitFn = makeArrayShrinkDeinit(T, size),
     };
+}
+
+/// Copy an array and independently clone its owned elements.
+pub fn cloneArray(
+    comptime T: type,
+    comptime size: usize,
+    allocator: std.mem.Allocator,
+    value: [size]T,
+    element_clone: ?*const fn (std.mem.Allocator, T) std.mem.Allocator.Error!T,
+    element_free: ?*const fn (std.mem.Allocator, T) void,
+) std.mem.Allocator.Error![size]T {
+    std.debug.assert(element_free == null or element_clone != null);
+    var result = value;
+    try cloneElements(T, allocator, &result, element_clone, element_free, null);
+    return result;
 }
 
 /// Wrapper for array generators with int element shrinker.
@@ -663,7 +700,7 @@ fn makeOptionalShrinkNext(comptime T: type) *const fn (*anyopaque) ??T {
             // Then try shrinking the inner value
             if (context.inner_iterator) |*inner_it| {
                 if (inner_it.next()) |shrunk_inner| {
-                    return shrunk_inner;
+                    return @as(?T, shrunk_inner);
                 }
             }
 
@@ -687,27 +724,17 @@ fn makeOptionalShrinkDeinit(comptime T: type) *const fn (*anyopaque) void {
 
 /// Shrink an optional value. Tries null first, then shrinks the inner value.
 pub fn optional(comptime T: type, allocator: std.mem.Allocator, value: ?T, inner_shrinker: ?*const fn (std.mem.Allocator, T) Iterator(T)) Iterator(?T) {
+    if (value == null) return Iterator(?T).empty();
     const Context = OptionalShrinkContext(T);
     const context = allocator.create(Context) catch return Iterator(?T).empty();
 
-    // If value is null, nothing to shrink
-    if (value == null) {
-        context.* = .{
-            .allocator = allocator,
-            .inner_value = undefined,
-            .tried_null = true,
-            .done = true,
-            .inner_iterator = null,
-        };
-    } else {
-        context.* = .{
-            .allocator = allocator,
-            .inner_value = value.?,
-            .tried_null = false,
-            .done = false,
-            .inner_iterator = if (inner_shrinker) |shrinker| shrinker(allocator, value.?) else null,
-        };
-    }
+    context.* = .{
+        .allocator = allocator,
+        .inner_value = value.?,
+        .tried_null = false,
+        .done = false,
+        .inner_iterator = if (inner_shrinker) |shrinker| shrinker(allocator, value.?) else null,
+    };
 
     return .{
         .context = context,

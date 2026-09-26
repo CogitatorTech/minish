@@ -553,6 +553,7 @@ pub fn hashMap(
 ///
 /// Memory lifecycle: The returned array matches the ownership of its elements.
 /// If elements are allocated, they will be freed automatically.
+/// Elements shrink independently when owned elements have a cloneFn.
 pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Generator(T)) Generator([size]T) {
     const ArrayGenerator = struct {
         fn generate(tc: *TestCase) core.GenError![size]T {
@@ -577,8 +578,22 @@ pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Gener
                 }
             }
         }
+
+        fn shrink(allocator: std.mem.Allocator, value: [size]T) shrink_mod.Iterator([size]T) {
+            return shrink_mod.arrayWithOwnership(T, size, allocator, value, element_gen.shrinkFn, element_gen.cloneFn, element_gen.freeFn);
+        }
+
+        fn clone(allocator: std.mem.Allocator, value: [size]T) std.mem.Allocator.Error![size]T {
+            return shrink_mod.cloneArray(T, size, allocator, value, element_gen.cloneFn, element_gen.freeFn);
+        }
     };
-    return .{ .generateFn = ArrayGenerator.generate, .shrinkFn = null, .freeFn = ArrayGenerator.free };
+    const can_clone = element_gen.freeFn == null or element_gen.cloneFn != null;
+    return .{
+        .generateFn = ArrayGenerator.generate,
+        .shrinkFn = if (can_clone and size > 0 and element_gen.shrinkFn != null) ArrayGenerator.shrink else null,
+        .freeFn = ArrayGenerator.free,
+        .cloneFn = if (can_clone) ArrayGenerator.clone else null,
+    };
 }
 
 // ============================================================================
@@ -586,6 +601,7 @@ pub fn array(comptime T: type, comptime size: usize, comptime element_gen: Gener
 // ============================================================================
 
 /// Generate an optional value (Some or None).
+/// Shrinking tries null first, then uses the element generator's shrinker.
 pub fn optional(comptime T: type, comptime element_gen: Generator(T)) Generator(?T) {
     const OptionalGenerator = struct {
         fn generate(tc: *TestCase) core.GenError!?T {
@@ -603,8 +619,25 @@ pub fn optional(comptime T: type, comptime element_gen: Generator(T)) Generator(
                 }
             }
         }
+
+        fn shrink(allocator: std.mem.Allocator, value: ?T) shrink_mod.Iterator(?T) {
+            return shrink_mod.optional(T, allocator, value, element_gen.shrinkFn);
+        }
+
+        fn clone(allocator: std.mem.Allocator, value: ?T) std.mem.Allocator.Error!?T {
+            if (value) |v| {
+                const copy = if (element_gen.cloneFn) |clone_fn| try clone_fn(allocator, v) else v;
+                return @as(?T, copy);
+            }
+            return null;
+        }
     };
-    return .{ .generateFn = OptionalGenerator.generate, .shrinkFn = null, .freeFn = OptionalGenerator.free };
+    return .{
+        .generateFn = OptionalGenerator.generate,
+        .shrinkFn = OptionalGenerator.shrink,
+        .freeFn = OptionalGenerator.free,
+        .cloneFn = if (element_gen.freeFn == null or element_gen.cloneFn != null) OptionalGenerator.clone else null,
+    };
 }
 
 // ============================================================================
@@ -625,55 +658,21 @@ pub fn constant(comptime value: anytype) Generator(@TypeOf(value)) {
 // ============================================================================
 
 /// Generate a 2-tuple with generic types.
+/// Elements shrink independently when every owned element has a cloneFn.
 ///
 /// Memory lifecycle: The tuple and its elements are owned by the Minish runner
 /// and will be freed automatically.
 pub fn tuple2(comptime T1: type, comptime T2: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2)) Generator(struct { T1, T2 }) {
-    const TupleGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!struct { T1, T2 } {
-            const v1 = try gen1.generateFn(tc);
-            const v2 = gen2.generateFn(tc) catch |err| {
-                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
-                return err;
-            };
-            return .{ v1, v2 };
-        }
-
-        fn free(allocator: std.mem.Allocator, value: struct { T1, T2 }) void {
-            if (gen1.freeFn) |freeFn| freeFn(allocator, value[0]);
-            if (gen2.freeFn) |freeFn| freeFn(allocator, value[1]);
-        }
-    };
-    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = TupleGenerator.free };
+    return structure(struct { T1, T2 }, .{ gen1, gen2 });
 }
 
 /// Generate a 3-tuple with generic types.
+/// Elements shrink independently when every owned element has a cloneFn.
 ///
 /// Memory lifecycle: The tuple and its elements are owned by the Minish runner
 /// and will be freed automatically.
 pub fn tuple3(comptime T1: type, comptime T2: type, comptime T3: type, comptime gen1: Generator(T1), comptime gen2: Generator(T2), comptime gen3: Generator(T3)) Generator(struct { T1, T2, T3 }) {
-    const TupleGenerator = struct {
-        fn generate(tc: *TestCase) core.GenError!struct { T1, T2, T3 } {
-            const v1 = try gen1.generateFn(tc);
-            const v2 = gen2.generateFn(tc) catch |err| {
-                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
-                return err;
-            };
-            const v3 = gen3.generateFn(tc) catch |err| {
-                if (gen1.freeFn) |freeFn| freeFn(tc.allocator, v1);
-                if (gen2.freeFn) |freeFn| freeFn(tc.allocator, v2);
-                return err;
-            };
-            return .{ v1, v2, v3 };
-        }
-
-        fn free(allocator: std.mem.Allocator, value: struct { T1, T2, T3 }) void {
-            if (gen1.freeFn) |freeFn| freeFn(allocator, value[0]);
-            if (gen2.freeFn) |freeFn| freeFn(allocator, value[1]);
-            if (gen3.freeFn) |freeFn| freeFn(allocator, value[2]);
-        }
-    };
-    return .{ .generateFn = TupleGenerator.generate, .shrinkFn = null, .freeFn = TupleGenerator.free };
+    return structure(struct { T1, T2, T3 }, .{ gen1, gen2, gen3 });
 }
 
 // ============================================================================
@@ -1599,6 +1598,219 @@ test "struct generators handle empty structs and fields without clone support" {
     try testing.expect(uncloneable.shrinkFn == null and uncloneable.cloneFn == null);
     const value = try uncloneable.generateFn(&tc);
     uncloneable.freeFn.?(testing.allocator, value);
+}
+
+test "arrays tuples and optionals shrink through the runner" {
+    const runner = @import("runner.zig");
+    const element = comptime Generator(i32){
+        .generateFn = constant(@as(i32, 100)).generateFn,
+        .shrinkFn = int(i32).shrinkFn,
+        .freeFn = null,
+    };
+    const Some = struct {
+        fn generate(_: *TestCase) core.GenError!?i32 {
+            return 100;
+        }
+    };
+    const some = comptime blk: {
+        var g = optional(i32, element);
+        g.generateFn = Some.generate;
+        break :blk g;
+    };
+    inline for (.{
+        .{ array(i32, 2, element), @as([2]i32, .{ 0, 9 }) },
+        .{ tuple2(i32, i32, element, element), @as(struct { i32, i32 }, .{ 0, 9 }) },
+        .{ tuple3(i32, bool, i32, element, constant(true), element), @as(struct { i32, bool, i32 }, .{ 0, true, 9 }) },
+        .{ some, @as(?i32, 9) },
+    }) |case| {
+        const V = @TypeOf(case[1]);
+        const Property = struct {
+            var last_failure: V = undefined;
+            var passing_candidates: usize = 0;
+            fn checkValue(value: V) !void {
+                const fails = switch (@typeInfo(V)) {
+                    .optional => if (value) |v| v > 8 else false,
+                    .array => value[0] + value[1] > 8,
+                    .@"struct" => value[0] + value[std.meta.fields(V).len - 1] > 8,
+                    else => unreachable,
+                };
+                if (fails) {
+                    last_failure = value;
+                    return error.PropertyFailed;
+                }
+                passing_candidates += 1;
+            }
+        };
+        Property.passing_candidates = 0;
+        try testing.expectError(error.PropertyFailed, runner.check(testing.allocator, case[0], Property.checkValue, .{
+            .seed = 1,
+            .num_runs = 1,
+        }));
+        try testing.expectEqualDeep(case[1], Property.last_failure);
+        try testing.expect(Property.passing_candidates > 0);
+    }
+}
+
+test "owned array and tuple candidates change one element without aliasing" {
+    inline for (.{
+        .{ array([]const u8, 2, string(.{ .min_len = 1 })), @as([2][]const u8, .{ "abcd", "efgh" }) },
+        .{ tuple2([]const u8, []const u8, string(.{ .min_len = 1 }), string(.{ .min_len = 1 })), @as(struct { []const u8, []const u8 }, .{ "abcd", "efgh" }) },
+        .{ tuple3([]const u8, []const u8, []const u8, string(.{ .min_len = 1 }), string(.{ .min_len = 1 }), string(.{ .min_len = 1 })), @as(struct { []const u8, []const u8, []const u8 }, .{ "abcd", "efgh", "ijkl" }) },
+    }) |case| {
+        const g = case[0];
+        const V = @TypeOf(case[1]);
+        const size = if (@typeInfo(V) == .array) @typeInfo(V).array.len else std.meta.fields(V).len;
+        const original = try g.cloneFn.?(testing.allocator, case[1]);
+        defer g.freeFn.?(testing.allocator, original);
+        const copy = try g.cloneFn.?(testing.allocator, original);
+        @constCast(copy[0])[0] = 'z';
+        try testing.expectEqualStrings("abcd", original[0]);
+        g.freeFn.?(testing.allocator, copy);
+        var it = g.shrinkFn.?(testing.allocator, original);
+        defer it.deinit();
+        var saw_element = [_]bool{false} ** size;
+        while (it.next()) |candidate| {
+            defer g.freeFn.?(testing.allocator, candidate);
+            var changed: usize = 0;
+            inline for (0..size) |i| {
+                try testing.expect(candidate[i].ptr != original[i].ptr);
+                try testing.expect(candidate[i].len >= 1);
+                if (candidate[i].len < original[i].len) {
+                    changed += 1;
+                    saw_element[i] = true;
+                } else try testing.expectEqualStrings(original[i], candidate[i]);
+            }
+            try testing.expectEqual(@as(usize, 1), changed);
+        }
+        for (saw_element) |seen| try testing.expect(seen);
+        try testing.expectEqualStrings("abcd", original[0]);
+    }
+}
+
+test "nested optional shrinking preserves each null level" {
+    const inner = comptime optional(i32, int(i32));
+    const g = optional(?i32, inner);
+    const original: ??i32 = @as(?i32, 100);
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    const none = it.next();
+    try testing.expect(none != null);
+    try testing.expect(none.? == null);
+    const some_none = it.next();
+    try testing.expect(some_none != null and some_none.? != null);
+    try testing.expect(some_none.?.? == null);
+    const some_zero = it.next();
+    try testing.expectEqual(@as(i32, 0), some_zero.?.?.?);
+
+    var null_it = g.shrinkFn.?(testing.allocator, null);
+    defer null_it.deinit();
+    try testing.expect(null_it.next() == null);
+    const clone = try g.cloneFn.?(testing.allocator, @as(?i32, null));
+    try testing.expect(clone != null and clone.? == null);
+}
+
+test "owned optional shrinking transfers independent candidates" {
+    const g = optional([]const u8, string(.{ .min_len = 1 }));
+    const original = try g.cloneFn.?(testing.allocator, "abcd");
+    defer g.freeFn.?(testing.allocator, original);
+    const copy = try g.cloneFn.?(testing.allocator, original);
+    @constCast(copy.?)[0] = 'z';
+    try testing.expectEqualStrings("abcd", original.?);
+    g.freeFn.?(testing.allocator, copy);
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    const none = it.next();
+    try testing.expect(none != null and none.? == null);
+    var count: usize = 0;
+    while (it.next()) |candidate| {
+        defer g.freeFn.?(testing.allocator, candidate);
+        try testing.expect(candidate.?.ptr != original.?.ptr);
+        try testing.expect(candidate.?.len >= 1 and candidate.?.len < original.?.len);
+        count += 1;
+    }
+    try testing.expect(count > 0);
+    try testing.expectEqualStrings("abcd", original.?);
+}
+
+test "array tuple and optional ownership cleans up allocation failures" {
+    inline for (comptime .{
+        .{ array([]const u8, 3, string(.{ .min_len = 1 })), @as([3][]const u8, .{ "abcd", "efgh", "ijkl" }) },
+        .{ tuple2([]const u8, []const u8, string(.{ .min_len = 1 }), string(.{ .min_len = 1 })), @as(struct { []const u8, []const u8 }, .{ "abcd", "efgh" }) },
+        .{ tuple3([]const u8, []const u8, []const u8, string(.{ .min_len = 1 }), string(.{ .min_len = 1 }), string(.{ .min_len = 1 })), @as(struct { []const u8, []const u8, []const u8 }, .{ "abcd", "efgh", "ijkl" }) },
+        .{ optional([]const u8, string(.{ .min_len = 1 })), @as(?[]const u8, "abcd") },
+    }) |case| {
+        const g = comptime case[0];
+        const original = comptime case[1];
+        const Test = struct {
+            fn clone(allocator: std.mem.Allocator) !void {
+                const copy = try g.cloneFn.?(allocator, original);
+                defer g.freeFn.?(allocator, copy);
+            }
+            fn shrink(allocator: std.mem.Allocator) void {
+                var it = g.shrinkFn.?(allocator, original);
+                defer it.deinit();
+                while (it.next()) |candidate| g.freeFn.?(allocator, candidate);
+            }
+        };
+        try testing.checkAllAllocationFailures(testing.allocator, Test.clone, .{});
+        var counter = testing.FailingAllocator.init(testing.allocator, .{});
+        Test.shrink(counter.allocator());
+        try testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
+        for (0..counter.alloc_index) |fail_index| {
+            var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+            Test.shrink(failing.allocator());
+            try testing.expect(failing.has_induced_failure);
+            try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        }
+    }
+}
+
+test "containers preserve fallback behavior without clone support" {
+    const uncloneable = comptime Generator([]const u8){
+        .generateFn = string(.{}).generateFn,
+        .shrinkFn = string(.{}).shrinkFn,
+        .freeFn = string(.{}).freeFn,
+    };
+    inline for (.{ array([]const u8, 2, uncloneable), tuple2(i32, []const u8, int(i32), uncloneable), tuple3(i32, bool, []const u8, int(i32), boolean(), uncloneable) }) |g| {
+        try testing.expect(g.shrinkFn == null and g.cloneFn == null);
+    }
+    const opt = optional([]const u8, uncloneable);
+    try testing.expect(opt.shrinkFn != null and opt.cloneFn == null);
+    var it = opt.shrinkFn.?(testing.allocator, "abcd");
+    defer it.deinit();
+    while (it.next()) |candidate| opt.freeFn.?(testing.allocator, candidate);
+
+    const empty = array(i32, 0, int(i32));
+    try testing.expect(empty.shrinkFn == null);
+    _ = try empty.cloneFn.?(testing.allocator, .{});
+    try testing.expect(array(i32, 2, constant(@as(i32, 1))).shrinkFn == null);
+}
+
+test "new container clones compose with struct shrinking" {
+    const S = struct { values: [2]?[]const u8, pair: struct { i32, []const u8 } };
+    const g = structure(S, .{
+        .values = array(?[]const u8, 2, optional([]const u8, string(.{ .min_len = 1 }))),
+        .pair = tuple2(i32, []const u8, int(i32), string(.{ .min_len = 1 })),
+    });
+    const original = try g.cloneFn.?(testing.allocator, .{ .values = .{ "abcd", null }, .pair = .{ 100, "efgh" } });
+    defer g.freeFn.?(testing.allocator, original);
+    var it = g.shrinkFn.?(testing.allocator, original);
+    defer it.deinit();
+    var saw_null = false;
+    var saw_number = false;
+    while (it.next()) |candidate| {
+        defer g.freeFn.?(testing.allocator, candidate);
+        try testing.expect(candidate.values[1] == null);
+        if (candidate.values[0]) |s| {
+            try testing.expect(s.ptr != original.values[0].?.ptr and s.len >= 1);
+        } else saw_null = true;
+        try testing.expect(candidate.pair[1].ptr != original.pair[1].ptr);
+        try testing.expect(candidate.pair[1].len >= 1);
+        if (candidate.pair[0] != original.pair[0]) saw_number = true;
+    }
+    try testing.expect(saw_null and saw_number);
+    try testing.expectEqualStrings("abcd", original.values[0].?);
+    try testing.expectEqualStrings("efgh", original.pair[1]);
 }
 
 test "regression: constrained generators preserve bounds while shrinking" {

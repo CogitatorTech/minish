@@ -59,7 +59,7 @@ Here is a brief comparison between example-based testing and property-based test
 - Written in pure Zig with no external dependencies
 - Includes over 20 built-in generators (for integers, floats, strings, lists, structs, UUIDs, timestamps, and more)
 - Seven combinators for composing generators (`map`, `flatMap`, `filter`, `sized`, `frequency`, `oneOf`, and `dependent`)
-- Supports automatic shrinking for integers, floats, strings, lists, tuples, arrays, and optionals
+- Supports automatic shrinking for integers, floats, strings, lists, tuples, arrays, optionals, and structs
 - Supports reproducible failures via fixed seeds and a verbose mode
 - Configurable and easy to integrate into existing Zig projects
 
@@ -175,8 +175,10 @@ You can find the API documentation for the latest release of Minish [here](https
 > Strings and nested lists shrink with independently owned copies of retained elements.
 > Structs shrink one field at a time using each field generator's shrinker. Unchanged
 > owned fields are cloned, and fields without a shrinker retain their values.
+> Tuples and arrays use the same element shrinkers and cloning rules. Optionals try
+> `null` first, then shrink the contained value.
 > Custom generators with a `freeFn` must also provide a `cloneFn` to enable shrinking
-> when used as list elements or struct fields.
+> when used as list elements, array elements, tuple elements, or struct fields.
 > A clone must use the supplied allocator, support the same `freeFn`, and release any
 > partial allocations if cloning fails. `cloneFn` defaults to `null`, so existing custom
 > generators keep their current behavior until they supply a clone function.
