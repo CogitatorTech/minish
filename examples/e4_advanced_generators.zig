@@ -76,7 +76,23 @@ pub fn main() !void {
     // Test 4: Range generator
     std.debug.print("\nTest 4: Integers in range [-100, 100]\n", .{});
     const range_gen = gen.intRange(i16, -100, 100);
-    try minish.check(allocator, range_gen, range_test, .{ .num_runs = 100 });
+    const Categories = struct {
+        fn negative(value: i16) bool {
+            return value < 0;
+        }
+        fn zero(value: i16) bool {
+            return value == 0;
+        }
+        fn positive(value: i16) bool {
+            return value > 0;
+        }
+    };
+    var coverage = [_]minish.Coverage(i16){
+        .{ .label = "negative", .predicate = Categories.negative },
+        .{ .label = "zero", .predicate = Categories.zero },
+        .{ .label = "positive", .predicate = Categories.positive },
+    };
+    try minish.checkWithCoverage(allocator, range_gen, range_test, &coverage, .{ .num_runs = 100, .seed = 42 });
 
     // Test 5: Array generator
     std.debug.print("\nTest 5: Fixed-size arrays\n", .{});

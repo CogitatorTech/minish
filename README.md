@@ -186,6 +186,35 @@ Each call replaces the previous values. `runs` includes the failing input, and `
 `successful_shrinks` counts candidates accepted as smaller counterexamples.
 The recorded `seed` can reproduce the run, including when no seed was given.
 
+### Reporting Input Coverage
+
+Use `checkWithCoverage` to see which categories of generated inputs were tested.
+
+```zig
+const Categories = struct {
+    fn empty(value: []const u8) bool {
+        return value.len == 0;
+    }
+    fn long(value: []const u8) bool {
+        return value.len >= 50;
+    }
+};
+var coverage = [_]minish.Coverage([]const u8){
+    .{ .label = "empty strings", .predicate = Categories.empty },
+    .{ .label = "long strings", .predicate = Categories.long },
+};
+try minish.checkWithCoverage(allocator, string_gen, reverse_twice_is_identity, &coverage, .{
+    .seed = 42,
+});
+```
+
+The runner prints each category's count and percentage.
+These results are also available in `hits` and `percentage` after the call, including when it returns an error.
+Counts reset on each call and include the original failing input, but exclude shrink candidates.
+No runs produce zero counts and percentages. Categories may overlap or leave inputs unclassified.
+Predicates borrow the input and must not free it.
+Coverage is reported without enforcing a minimum percentage.
+
 ### Documentation
 
 You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).

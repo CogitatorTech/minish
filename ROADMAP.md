@@ -60,7 +60,7 @@ This document outlines the features implemented in Minish and the future goals f
 - [x] Verbose mode
 - [x] Improved failure messages with seed output
 - [x] Statistics collection
-- [ ] Coverage reporting
+- [x] Coverage reporting for named input categories
 
 ### Documentation
 

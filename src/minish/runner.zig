@@ -28,6 +28,19 @@ pub const Statistics = struct {
     successful_shrinks: u32 = 0,
 };
 
+/// A named input category for checkWithCoverage. Categories may overlap.
+pub fn Coverage(comptime T: type) type {
+    return struct {
+        label: []const u8,
+        /// Borrows the generated input before the property runs.
+        predicate: *const fn (T) bool,
+        /// Matching generated inputs, including a failing input but excluding shrinking.
+        hits: u32 = 0,
+        /// Percentage of tested generated inputs matching this category, or zero for no runs.
+        percentage: f64 = 0,
+    };
+}
+
 /// Configuration options for property tests.
 pub const Options = struct {
     /// Number of test runs to execute.
@@ -60,6 +73,31 @@ pub fn check(
     test_fn: anytype,
     options: Options,
 ) !void {
+    return checkImpl(allocator, generator, test_fn, options, null);
+}
+
+/// Run a property and report counts and percentages for named input categories.
+/// Pass a mutable slice or array pointer of Coverage(T), where T is the generator's value type.
+/// Results replace previous counts and remain available when the check returns an error.
+/// Predicates borrow each generated input before the property runs and must not free it.
+/// Shrink candidates are excluded. Categories may overlap or leave inputs unclassified.
+pub fn checkWithCoverage(
+    allocator: Allocator,
+    generator: anytype,
+    test_fn: anytype,
+    coverage: anytype,
+    options: Options,
+) !void {
+    return checkImpl(allocator, generator, test_fn, options, coverage);
+}
+
+fn checkImpl(
+    allocator: Allocator,
+    generator: anytype,
+    test_fn: anytype,
+    options: Options,
+    coverage: anytype,
+) !void {
     // Handle seed: use provided seed or derive one from a stack address.
     // ASLR ensures the stack address differs between runs, providing non-determinism.
     const seed = options.seed orelse blk: {
@@ -68,6 +106,18 @@ pub fn check(
         break :blk @as(u64, @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&addr))));
     };
     var statistics = Statistics{ .seed = seed };
+    if (@TypeOf(coverage) != @TypeOf(null)) {
+        for (coverage) |*category| category.hits = 0;
+    }
+    defer if (@TypeOf(coverage) != @TypeOf(null)) {
+        if (coverage.len > 0) std.debug.print("Coverage:\n", .{});
+        for (coverage) |*category| {
+            category.percentage = if (statistics.runs == 0) 0 else 100.0 * @as(f64, @floatFromInt(category.hits)) / @as(f64, @floatFromInt(statistics.runs));
+            std.debug.print("  {s}: {d}/{d} ({d:.1}%)\n", .{
+                category.label, category.hits, statistics.runs, category.percentage,
+            });
+        }
+    };
     defer if (options.statistics) |output| {
         output.* = statistics;
     };
@@ -90,6 +140,11 @@ pub fn check(
             freeFn(allocator, value);
         };
         statistics.runs += 1;
+        if (@TypeOf(coverage) != @TypeOf(null)) {
+            for (coverage) |*category| {
+                if (category.predicate(value)) category.hits += 1;
+            }
+        }
 
         test_fn(value) catch |err| {
             std.debug.print(
@@ -512,4 +567,106 @@ test "runner statistics distinguish shrink attempts from accepted candidates" {
             try testing.expect(statistics.successful_shrinks < statistics.shrink_attempts);
         }
     }
+}
+
+test "coverage counts overlapping categories and resets on success and errors" {
+    const Fixture = struct {
+        var generated: u32 = 0;
+        var generator_error_at: ?u32 = null;
+        var property_error_at: ?i32 = null;
+        var classified: u32 = 0;
+
+        fn generate(_: *TestCase) core.GenError!i32 {
+            if (generator_error_at) |limit| {
+                if (generated == limit) return error.InvalidChoice;
+            }
+            const value: i32 = @intCast(generated);
+            generated += 1;
+            return value;
+        }
+        fn property(value: i32) !void {
+            if (property_error_at) |limit| {
+                if (value >= limit) return error.PropertyFailed;
+            }
+        }
+        fn all(_: i32) bool {
+            classified += 1;
+            return true;
+        }
+        fn even(value: i32) bool {
+            return @mod(value, 2) == 0;
+        }
+        fn never(_: i32) bool {
+            return false;
+        }
+    };
+    const generator = gen.Generator(i32){
+        .generateFn = Fixture.generate,
+        .shrinkFn = gen.int(i32).shrinkFn,
+        .freeFn = null,
+    };
+    var coverage = [_]Coverage(i32){
+        .{ .label = "all", .predicate = Fixture.all, .hits = 99, .percentage = 99 },
+        .{ .label = "even", .predicate = Fixture.even },
+        .{ .label = "never", .predicate = Fixture.never },
+    };
+    const Scenario = struct {
+        num_runs: u32 = 5,
+        generator_error_at: ?u32 = null,
+        property_error_at: ?i32 = null,
+        expected_error: ?anyerror = null,
+        expected_runs: u32,
+        expected_even: u32,
+    };
+    for ([_]Scenario{
+        .{ .expected_runs = 5, .expected_even = 3 },
+        .{ .property_error_at = 2, .expected_error = error.PropertyFailed, .expected_runs = 3, .expected_even = 2 },
+        .{ .generator_error_at = 3, .expected_error = error.InvalidChoice, .expected_runs = 3, .expected_even = 2 },
+        .{ .generator_error_at = 0, .expected_error = error.InvalidChoice, .expected_runs = 0, .expected_even = 0 },
+        .{ .num_runs = 0, .expected_runs = 0, .expected_even = 0 },
+    }) |scenario| {
+        Fixture.generated = 0;
+        Fixture.classified = 0;
+        Fixture.generator_error_at = scenario.generator_error_at;
+        Fixture.property_error_at = scenario.property_error_at;
+        var statistics: Statistics = .{};
+        const result = checkWithCoverage(testing.allocator, generator, Fixture.property, coverage[0..], .{
+            .num_runs = scenario.num_runs,
+            .seed = 42,
+            .statistics = &statistics,
+        });
+        if (scenario.expected_error) |err| {
+            try testing.expectError(err, result);
+        } else {
+            try result;
+        }
+        try testing.expectEqual(scenario.expected_runs, statistics.runs);
+        try testing.expectEqual(scenario.expected_runs, Fixture.classified);
+        try testing.expectEqual(scenario.expected_runs, coverage[0].hits);
+        try testing.expectEqual(scenario.expected_even, coverage[1].hits);
+        try testing.expectEqual(@as(u32, 0), coverage[2].hits);
+        try testing.expectEqual(@as(f64, if (scenario.expected_runs == 0) 0 else 100), coverage[0].percentage);
+        const expected_percentage: f64 = if (scenario.expected_runs == 0) 0 else 100.0 * @as(f64, @floatFromInt(scenario.expected_even)) / @as(f64, @floatFromInt(scenario.expected_runs));
+        try testing.expectApproxEqAbs(expected_percentage, coverage[1].percentage, 0.000001);
+        try testing.expectEqual(@as(f64, 0), coverage[2].percentage);
+        if (scenario.property_error_at != null) try testing.expect(statistics.shrink_attempts > 0);
+    }
+}
+
+test "coverage borrows owned inputs and accepts an empty category list" {
+    const Fixture = struct {
+        fn lengthThree(value: []const u8) bool {
+            return value.len == 3;
+        }
+        fn property(value: []const u8) !void {
+            try testing.expectEqual(@as(usize, 3), value.len);
+        }
+    };
+    const generator = gen.string(.{ .min_len = 3, .max_len = 3 });
+    var coverage = [_]Coverage([]const u8){.{ .label = "length three", .predicate = Fixture.lengthThree }};
+    try checkWithCoverage(testing.allocator, generator, Fixture.property, &coverage, .{ .seed = 42, .num_runs = 5 });
+    try testing.expectEqual(@as(u32, 5), coverage[0].hits);
+    try testing.expectEqual(@as(f64, 100), coverage[0].percentage);
+    var empty: [0]Coverage([]const u8) = .{};
+    try checkWithCoverage(testing.allocator, generator, Fixture.property, &empty, .{ .seed = 42, .num_runs = 5 });
 }
