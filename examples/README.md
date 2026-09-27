@@ -7,12 +7,12 @@
 | 1 | [e1_simple_example.zig](e1_simple_example.zig)                 | Basic tuple generator                                  |
 | 2 | [e2_string_example.zig](e2_string_example.zig)                 | String property testing                                |
 | 3 | [e3_list_example.zig](e3_list_example.zig)                     | List property testing (sorting)                        |
-| 4 | [e4_advanced_generators.zig](e4_advanced_generators.zig)       | Multiple generator types and input coverage             |
+| 4 | [e4_advanced_generators.zig](e4_advanced_generators.zig)       | Multiple generator types and input coverage            |
 | 5 | [e5_struct_and_combinators.zig](e5_struct_and_combinators.zig) | Struct generation and combinators                      |
 | 6 | [e6_shrinking_demo.zig](e6_shrinking_demo.zig)                 | Shrinking and statistics demonstration                 |
 | 7 | [e7_hashmap_example.zig](e7_hashmap_example.zig)               | HashMap property testing                               |
 | 8 | [e8_misc_features.zig](e8_misc_features.zig)                   | Show cases for oneOf, dependent, timestamps, and enums |
-| 9 | [e9_zig_test.zig](e9_zig_test.zig)                           | Properties inside Zig tests and failure propagation    |
+| 9 | [e9_zig_test.zig](e9_zig_test.zig)                             | Properties inside Zig tests and failure propagation    |
 
 #### Running Examples
 

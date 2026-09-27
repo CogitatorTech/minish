@@ -131,7 +131,7 @@ Good first tasks:
 
 Before coding:
 
-1. Identify which module(s) the change touches (`gen`, `combinators`, `runner`, `shrink`, or `core`).
+1. Identify which module (s) the change touches (`gen`, `combinators`, `runner`, `shrink`, or `core`).
 2. Consider whether a new generator also needs a shrinker.
 3. Check whether the change is public-API-visible (i.e. re-exported from `src/lib.zig`); if so, treat it as a breaking or additive API change
    deliberately.

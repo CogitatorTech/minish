@@ -90,10 +90,10 @@ This command will download Minish and add it to Zig's global cache and update yo
 
 Zig version supported by the main releases of Minish:
 
-| Zig      | Minish Tags |
-|----------|-------------|
-| `0.16.0` | `v0.3.x`, `v0.4.x`     |
-| `0.15.2` | `v0.1.x`    |
+| Zig      | Minish Tags        |
+|----------|--------------------|
+| `0.16.0` | `v0.3.x`, `v0.4.x` |
+| `0.15.2` | `v0.1.x`           |
 
 The `main` branch normally is developed and build using the latest (non-developmental) Zig release.
 
@@ -163,7 +163,6 @@ pub fn main() !void {
 ```
 
 ---
-
 
 ### Documentation
 
