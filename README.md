@@ -92,7 +92,7 @@ Zig version supported by the main releases of Minish:
 
 | Zig      | Minish Tags |
 |----------|-------------|
-| `0.16.0` | `v0.3.x`    |
+| `0.16.0` | `v0.3.x`, `v0.4.x`     |
 | `0.15.2` | `v0.1.x`    |
 
 The `main` branch normally is developed and build using the latest (non-developmental) Zig release.
@@ -164,75 +164,10 @@ pub fn main() !void {
 
 ---
 
-### Collecting Statistics
-
-Pass a `Statistics` pointer through `Options.statistics` to collect results.
-
-```zig
-var statistics: minish.Statistics = .{};
-const result = minish.check(allocator, string_gen, reverse_twice_is_identity, .{
-    .statistics = &statistics,
-});
-std.debug.print("Passed {d}/{d} runs; tested {d} shrink candidates.\n", .{
-    statistics.passed,
-    statistics.runs,
-    statistics.shrink_attempts,
-});
-try result;
-```
-
-Statistics are available after both successful and failed checks.
-Each call replaces the previous values. `runs` includes the failing input, and `passed` excludes shrink candidates.
-`successful_shrinks` counts candidates accepted as smaller counterexamples.
-The recorded `seed` can reproduce the run, including when no seed was given.
-
-### Reporting Input Coverage
-
-Use `checkWithCoverage` to see which categories of generated inputs were tested.
-
-```zig
-const Categories = struct {
-    fn empty(value: []const u8) bool {
-        return value.len == 0;
-    }
-    fn long(value: []const u8) bool {
-        return value.len >= 50;
-    }
-};
-var coverage = [_]minish.Coverage([]const u8){
-    .{ .label = "empty strings", .predicate = Categories.empty },
-    .{ .label = "long strings", .predicate = Categories.long },
-};
-try minish.checkWithCoverage(allocator, string_gen, reverse_twice_is_identity, &coverage, .{
-    .seed = 42,
-});
-```
-
-The runner prints each category's count and percentage.
-These results are also available in `hits` and `percentage` after the call, including when it returns an error.
-Counts reset on each call and include the original failing input, but exclude shrink candidates.
-No runs produce zero counts and percentages. Categories may overlap or leave inputs unclassified.
-Predicates borrow the input and must not free it.
-Coverage is reported without enforcing a minimum percentage.
 
 ### Documentation
 
 You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).
-
-> [!NOTE]
-> Shrinking keeps the numeric ranges and minimum collection lengths.
-> List shrinking tries removing elements first, then uses the element generator's
-> shrinker to simplify individual values without changing the list length.
-> Strings and nested lists shrink with independently owned copies of retained elements.
-> Structs shrink one field at a time using each field generator's shrinker. Unchanged
-> owned fields are cloned, and fields without a shrinker retain their values.
-> Tuples and arrays use the same element shrinkers and cloning rules. Optionals try
-> `null` first, then shrink the contained value.
-> Custom generators with a `freeFn` must also provide a `cloneFn` to enable shrinking
-> when used as list elements, array elements, tuple elements, or struct fields.
-> A clone must use the supplied allocator, support the same `freeFn`, and release any
-> partial allocations if cloning fails. `cloneFn` defaults to `null`, so existing custom
-> generators keep their current behavior until they supply a clone function.
 
 ### Examples
 
