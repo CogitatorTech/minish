@@ -169,17 +169,17 @@ fn makeFloatShrinkNext(comptime T: type) *const fn (*anyopaque) ?T {
         fn next(ctx: *anyopaque) ?T {
             const context: *FloatShrinkContext(T) = @ptrCast(@alignCast(ctx));
 
-            if (!context.first_call) {
-                context.current_bound = context.last_tried;
+            if (context.first_call) {
+                context.first_call = false;
+                if (context.current_bound == context.failing_bound) return null;
+                return context.current_bound;
             }
-            context.first_call = false;
+            context.current_bound = context.last_tried;
 
             const diff = if (context.failing_bound > context.current_bound)
                 context.failing_bound - context.current_bound
             else
                 context.current_bound - context.failing_bound;
-
-            if (diff < 1e-10) return null; // Precision limit
 
             const next_val = if (context.failing_bound > context.current_bound)
                 context.current_bound + (diff / 2.0)
@@ -1070,6 +1070,23 @@ test "float shrinking with f32" {
     const first = it.next();
     try testing.expect(first != null);
     try testing.expect(@abs(first.?) < 50.0);
+}
+
+test "float shrinking tries the target and continues below the old precision cutoff" {
+    inline for (.{ f32, f64 }) |T| {
+        for ([_]T{ 1e-12, -1e-12 }) |value| {
+            var it = float(T, testing.allocator, value);
+            defer it.deinit();
+            try testing.expectEqual(@as(T, 0), it.next().?);
+            try testing.expectEqual(value / 2, it.next().?);
+        }
+        var at_target = floatTowards(T, testing.allocator, 2, 2);
+        defer at_target.deinit();
+        try testing.expectEqual(@as(?T, null), at_target.next());
+        var bounded = floatTowards(T, testing.allocator, 3, 2);
+        defer bounded.deinit();
+        try testing.expectEqual(@as(T, 2), bounded.next().?);
+    }
 }
 
 // ============================================================================

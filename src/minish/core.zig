@@ -65,9 +65,7 @@ pub const TestCase = struct {
             result = self.prng.random().intRangeAtMost(u64, 0, n);
         }
 
-        if (self.prefix.len == 0) {
-            try self.choices.append(self.allocator, result);
-        }
+        try self.choices.append(self.allocator, result);
 
         if (result > n) {
             return error.InvalidChoice;
@@ -133,6 +131,21 @@ pub const TestCase = struct {
 // ============================================================================
 
 const testing = std.testing;
+
+test "replay records choices and enforces limits after the prefix ends" {
+    for ([_][]const u64{ &.{}, &.{3}, &.{ 3, 4, 5 } }) |prefix| {
+        var tc = TestCase.init(testing.allocator, 42);
+        defer tc.deinit();
+        tc.prefix = prefix;
+        tc.max_size = 2;
+        const first = try tc.choice(10);
+        const second = try tc.choice(10);
+        try testing.expectEqualSlices(u64, &.{ first, second }, tc.choices.items);
+        if (prefix.len > 0) try testing.expectEqual(@as(u64, 3), first);
+        if (prefix.len > 1) try testing.expectEqual(@as(u64, 4), second);
+        try testing.expectError(error.Overrun, tc.choice(10));
+    }
+}
 
 test "regression: weighted choice detects overflow" {
     // Bug: Summing weights could overflow u64 silently

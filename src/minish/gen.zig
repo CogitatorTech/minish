@@ -150,7 +150,7 @@ pub fn floatRange(comptime T: type, comptime min: T, comptime max: T) Generator(
         fn generate(tc: *TestCase) core.GenError!T {
             // Generate a value in [0, 1] and scale to range
             const mantissa = try tc.choice(std.math.maxInt(u32));
-            const normalized: T = @as(T, @floatFromInt(mantissa)) / @as(T, @floatFromInt(std.math.maxInt(u32)));
+            const normalized: T = @floatCast(@as(f64, @floatFromInt(mantissa)) / @as(f64, @floatFromInt(std.math.maxInt(u32))));
             // Opposite signs can overflow the range width even with finite bounds.
             const value = if (min < 0 and max > 0)
                 (1 - normalized) * min + normalized * max
@@ -467,6 +467,8 @@ pub fn list(comptime T: type, comptime element_gen: Generator(T), comptime min_l
 // ============================================================================
 
 /// Generate a HashMap with random keys and values.
+/// Retries collisions to reach the chosen entry count, with at most TestCase.max_size
+/// insertion attempts. Returns error.Overrun if the count cannot be reached within the budget.
 ///
 /// Example:
 /// ```zig
@@ -516,7 +518,8 @@ pub fn hashMap(
             }
 
             var i: usize = 0;
-            while (i < num_entries) : (i += 1) {
+            while (map.count() < num_entries) : (i += 1) {
+                if (i >= tc.max_size) return error.Overrun;
                 const key = try key_gen.generateFn(tc);
                 const value = value_gen.generateFn(tc) catch |err| {
                     if (key_gen.freeFn) |freeKey| freeKey(tc.allocator, key);
@@ -530,7 +533,7 @@ pub fn hashMap(
                     return err;
                 };
                 if (gop.found_existing) {
-                    // Collision: discard the new key/value (the existing entry stays).
+                    // Keep the existing key and replace its value.
                     if (key_gen.freeFn) |freeKey| freeKey(tc.allocator, key);
                     if (value_gen.freeFn) |freeVal| freeVal(tc.allocator, gop.value_ptr.*);
                 }
@@ -1329,7 +1332,8 @@ test "regression: hashMap with collisions does not leak duplicate keys/values" {
     var tc = TestCase.init(allocator, 12345);
     defer tc.deinit();
 
-    // 10 put attempts, but key range is only [0, 1] so at least 8 collisions.
+    // Ten attempts cannot fill ten entries from a two-key domain.
+    tc.max_size = 11;
     FailingStringGen.reset(10);
     const map_gen = hashMap(
         i32,
@@ -1339,9 +1343,28 @@ test "regression: hashMap with collisions does not leak duplicate keys/values" {
         10,
         10,
     );
-    var map = try map_gen.generateFn(&tc);
-    defer map_gen.freeFn.?(allocator, map);
-    try testing.expect(map.count() <= 2);
+    try testing.expectError(error.Overrun, map_gen.generateFn(&tc));
+}
+
+test "hashMap retries collisions until the requested size is reached" {
+    var tc = TestCase.init(testing.allocator, 42);
+    defer tc.deinit();
+    tc.prefix = &.{ 0, 0, 0, 1 };
+    const g = hashMap(u8, bool, intRange(u8, 0, 1), constant(true), 2, 2);
+    const value = try g.generateFn(&tc);
+    defer g.freeFn.?(testing.allocator, value);
+    try testing.expectEqual(@as(u32, 2), value.count());
+    try testing.expect(value.contains(0) and value.contains(1));
+    try testing.expectEqual(@as(usize, 4), tc.choices.items.len);
+}
+
+test "hashMap bounds retries even when generators make no random choices" {
+    var tc = TestCase.init(testing.allocator, 42);
+    defer tc.deinit();
+    tc.max_size = 4;
+    const g = hashMap(u8, bool, constant(@as(u8, 0)), constant(true), 2, 2);
+    try testing.expectError(error.Overrun, g.generateFn(&tc));
+    try testing.expectEqual(@as(usize, 1), tc.choices.items.len);
 }
 
 test "regression: nested lists retain ownership when properties fail" {
@@ -1858,7 +1881,7 @@ test "regression: constrained generators preserve bounds while shrinking" {
 }
 
 test "regression: finite float ranges do not overflow" {
-    inline for (.{ f32, f64 }) |T| {
+    inline for (.{ f16, f32, f64 }) |T| {
         const bound = std.math.floatMax(T);
         const g = floatRange(T, -bound, bound);
         for ([_]u64{ 0, std.math.maxInt(u32) / 2, std.math.maxInt(u32) }) |choice| {
@@ -1871,6 +1894,16 @@ test "regression: finite float ranges do not overflow" {
             if (choice == 0) try testing.expectEqual(-bound, value);
             if (choice == std.math.maxInt(u32)) try testing.expectEqual(bound, value);
         }
+    }
+}
+
+test "f16 ranges retain endpoints and interior values" {
+    const g = floatRange(f16, 0, 1);
+    for ([_]u64{ 0, 1073741824, 2147483648, std.math.maxInt(u32) }, [_]f16{ 0, 0.25, 0.5, 1 }) |choice, expected| {
+        var tc = TestCase.init(testing.allocator, 42);
+        defer tc.deinit();
+        tc.prefix = &.{choice};
+        try testing.expectEqual(expected, try g.generateFn(&tc));
     }
 }
 

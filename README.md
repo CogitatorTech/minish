@@ -83,17 +83,17 @@ Run the following command in the root directory of your project to download Mini
 zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch_or_tag>.tar.gz"
 ```
 
-Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.3.0`.
+Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.4.0`.
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
 ##### Zig Version Support
 
 Zig version supported by the main releases of Minish:
 
-| Zig      | Minish Tags        |
-|----------|--------------------|
-| `0.16.0` | `v0.3.x`, `v0.4.x` |
-| `0.15.2` | `v0.1.x`           |
+| Zig      | Minish Tags           |
+|----------|-----------------------|
+| `0.16.0` | `v0.3.x` and `v0.4.x` |
+| `0.15.2` | `v0.1.x`              |
 
 The `main` branch normally is developed and build using the latest (non-developmental) Zig release.
 
