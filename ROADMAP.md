@@ -69,13 +69,12 @@ This document outlines the features implemented in Minish and the future goals f
 - [x] Module-level docstrings (lib, gen, shrink, combinators, runner, core)
 - [x] Function-level docstrings for public API
 - [x] Generated API docs via `zig build docs`
-- [ ] Tutorial guide
 
 ### Future Goals
 
 - [ ] Stateful testing (using state machine or model-based)
 - [ ] Command sequence generation
 - [ ] Test database for reproducibility
-- [ ] Integration with Zig's test framework
+- [x] Integration with Zig's test framework
 - [ ] Parallel test execution
 - [ ] Custom shrinker DSL

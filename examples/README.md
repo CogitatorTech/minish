@@ -12,6 +12,7 @@
 | 6 | [e6_shrinking_demo.zig](e6_shrinking_demo.zig)                 | Shrinking and statistics demonstration                 |
 | 7 | [e7_hashmap_example.zig](e7_hashmap_example.zig)               | HashMap property testing                               |
 | 8 | [e8_misc_features.zig](e8_misc_features.zig)                   | Show cases for oneOf, dependent, timestamps, and enums |
+| 9 | [e9_zig_test.zig](e9_zig_test.zig)                           | Properties inside Zig tests and failure propagation    |
 
 #### Running Examples
 
@@ -32,3 +33,7 @@ To run all examples:
 ```sh
 zig build run-all
 ```
+
+The ninth example uses Zig `test` blocks and `std.testing.allocator`.
+It also runs alongside the library tests with `zig build test` or `make test`.
+To run only this example, use `zig build run-e9_zig_test`.

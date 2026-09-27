@@ -237,6 +237,8 @@ You can find the API documentation for the latest release of Minish [here](https
 ### Examples
 
 Check out the [examples](examples) directory for example usages of Minish.
+The [Zig test example](examples/e9_zig_test.zig) demonstrates properties inside
+`test` blocks and runs alongside the library tests with `zig build test`.
 
 ---
 

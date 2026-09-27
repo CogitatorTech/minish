@@ -22,7 +22,8 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_tests = b.addRunArtifact(tests);
-    b.step("test", "Run unit tests").dependOn(&run_tests.step);
+    const test_step = b.step("test", "Run unit tests and property test examples");
+    test_step.dependOn(&run_tests.step);
 
     // API Documentation
     const docs_step = b.step("docs", "Generate API documentation");
@@ -64,15 +65,22 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
             });
+            example_mod.addImport("minish", minish_mod);
 
-            const exe = b.addExecutable(.{
-                .name = stem,
-                .root_module = example_mod,
-            });
-            exe.root_module.addImport("minish", minish_mod);
-            b.installArtifact(exe);
+            const run_cmd = if (std.mem.endsWith(u8, entry.name, "_test.zig")) blk: {
+                const example_tests = b.addTest(.{ .root_module = example_mod });
+                const run_example_tests = b.addRunArtifact(example_tests);
+                test_step.dependOn(&run_example_tests.step);
+                break :blk run_example_tests;
+            } else blk: {
+                const exe = b.addExecutable(.{
+                    .name = stem,
+                    .root_module = example_mod,
+                });
+                b.installArtifact(exe);
+                break :blk b.addRunArtifact(exe);
+            };
 
-            const run_cmd = b.addRunArtifact(exe);
             const step_name = b.fmt("run-{s}", .{stem});
             const run_example_step = b.step(step_name, b.fmt("Run example {s}", .{stem}));
             run_example_step.dependOn(&run_cmd.step);
