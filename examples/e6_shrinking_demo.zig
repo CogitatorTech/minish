@@ -51,10 +51,19 @@ pub fn main() !void {
     std.debug.print("Watch how the failing input is minimized:\n\n", .{});
 
     const tuple_gen = gen.tuple2(i32, i32, gen.int(i32), gen.int(i32));
-    _ = minish.check(allocator, tuple_gen, sum_below_1000, .{ .num_runs = 100 }) catch |err| {
+    var statistics: minish.Statistics = .{};
+    _ = minish.check(allocator, tuple_gen, sum_below_1000, .{
+        .num_runs = 100,
+        .seed = 42,
+        .statistics = &statistics,
+    }) catch |err| {
         std.debug.print("\nProperty failed with: {s}\n", .{@errorName(err)});
         std.debug.print("The shrinker found a minimal counterexample!\n\n", .{});
     };
+    std.debug.print("Tested {d} shrink candidates and accepted {d} reductions.\n\n", .{
+        statistics.shrink_attempts,
+        statistics.successful_shrinks,
+    });
 
     // Demo 2: List Shrinking
     std.debug.print("Demo 2: List Shrinking\n", .{});

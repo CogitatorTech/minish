@@ -33,6 +33,7 @@
 //! - `combinators`: Functions to compose and transform generators
 //! - `check`: The main function to run property tests
 //! - `Options`: Configuration for test runs (num_runs, seed, etc.)
+//! - `Statistics`: Optional counts of test runs and shrinking
 
 const std = @import("std");
 
@@ -56,6 +57,9 @@ pub const check = @import("minish/runner.zig").check;
 /// Configuration options for property tests.
 pub const Options = @import("minish/runner.zig").Options;
 
+/// Counts from a check call, collected through Options.statistics.
+pub const Statistics = @import("minish/runner.zig").Statistics;
+
 // Backwards compatibility alias
 pub const run = check;
 
@@ -69,5 +73,6 @@ test "Public API Sanity Check" {
     try std.testing.expect(@typeInfo(combinators) == .@"struct");
     try std.testing.expect(@typeInfo(@TypeOf(check)) == .@"fn");
     try std.testing.expect(@TypeOf(Options) == type);
+    try std.testing.expect(@TypeOf(Statistics) == type);
     try std.testing.expect(@TypeOf(TestCase) == type);
 }

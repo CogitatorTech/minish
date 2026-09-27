@@ -59,7 +59,7 @@ This document outlines the features implemented in Minish and the future goals f
 - [x] Max shrink attempts limit
 - [x] Verbose mode
 - [x] Improved failure messages with seed output
-- [ ] Statistics collection
+- [x] Statistics collection
 - [ ] Coverage reporting
 
 ### Documentation

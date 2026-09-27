@@ -9,7 +9,7 @@
 | 3 | [e3_list_example.zig](e3_list_example.zig)                     | List property testing (sorting)                        |
 | 4 | [e4_advanced_generators.zig](e4_advanced_generators.zig)       | Multiple generator types                               |
 | 5 | [e5_struct_and_combinators.zig](e5_struct_and_combinators.zig) | Struct generation and combinators                      |
-| 6 | [e6_shrinking_demo.zig](e6_shrinking_demo.zig)                 | Shrinking demonstration                                |
+| 6 | [e6_shrinking_demo.zig](e6_shrinking_demo.zig)                 | Shrinking and statistics demonstration                 |
 | 7 | [e7_hashmap_example.zig](e7_hashmap_example.zig)               | HashMap property testing                               |
 | 8 | [e8_misc_features.zig](e8_misc_features.zig)                   | Show cases for oneOf, dependent, timestamps, and enums |
 

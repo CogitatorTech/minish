@@ -164,6 +164,28 @@ pub fn main() !void {
 
 ---
 
+### Collecting Statistics
+
+Pass a `Statistics` pointer through `Options.statistics` to collect results.
+
+```zig
+var statistics: minish.Statistics = .{};
+const result = minish.check(allocator, string_gen, reverse_twice_is_identity, .{
+    .statistics = &statistics,
+});
+std.debug.print("Passed {d}/{d} runs; tested {d} shrink candidates.\n", .{
+    statistics.passed,
+    statistics.runs,
+    statistics.shrink_attempts,
+});
+try result;
+```
+
+Statistics are available after both successful and failed checks.
+Each call replaces the previous values. `runs` includes the failing input, and `passed` excludes shrink candidates.
+`successful_shrinks` counts candidates accepted as smaller counterexamples.
+The recorded `seed` can reproduce the run, including when no seed was given.
+
 ### Documentation
 
 You can find the API documentation for the latest release of Minish [here](https://CogitatorTech.github.io/minish/).

@@ -14,6 +14,20 @@ const shrink_mod = @import("shrink.zig");
 const Allocator = std.mem.Allocator;
 const TestCase = core.TestCase;
 
+/// Statistics from one check call, including calls that return an error.
+pub const Statistics = struct {
+    /// Seed used by the runner, including an automatically derived seed.
+    seed: u64 = 0,
+    /// Generated inputs tested before shrinking, including a failing input.
+    runs: u32 = 0,
+    /// Generated inputs that passed. Passing shrink candidates are excluded.
+    passed: u32 = 0,
+    /// Shrink candidates evaluated by the property.
+    shrink_attempts: u32 = 0,
+    /// Failing shrink candidates accepted as smaller counterexamples.
+    successful_shrinks: u32 = 0,
+};
+
 /// Configuration options for property tests.
 pub const Options = struct {
     /// Number of test runs to execute.
@@ -24,6 +38,8 @@ pub const Options = struct {
     max_shrink_attempts: u32 = 1000,
     /// Whether to print verbose output during testing.
     verbose: bool = false,
+    /// Optional output, replaced with this call's statistics when check returns.
+    statistics: ?*Statistics = null,
 };
 
 /// Run the tests with the given generator and property function.
@@ -51,6 +67,10 @@ pub fn check(
         const addr = @intFromPtr(&anchor);
         break :blk @as(u64, @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&addr))));
     };
+    var statistics = Statistics{ .seed = seed };
+    defer if (options.statistics) |output| {
+        output.* = statistics;
+    };
     var prng = std.Random.DefaultPrng.init(seed);
 
     if (options.verbose) {
@@ -69,6 +89,7 @@ pub fn check(
         defer if (generator.freeFn) |freeFn| {
             freeFn(allocator, value);
         };
+        statistics.runs += 1;
 
         test_fn(value) catch |err| {
             std.debug.print(
@@ -94,16 +115,15 @@ pub fn check(
                 defer if (!minimal_is_original) {
                     if (generator.freeFn) |freeFn| freeFn(allocator, minimal_value);
                 };
-                var shrink_attempts: u32 = 0;
                 var it = shrinker(allocator, minimal_value);
                 defer it.deinit();
 
-                while (shrink_attempts < options.max_shrink_attempts) {
+                while (statistics.shrink_attempts < options.max_shrink_attempts) {
                     const next_val = it.next() orelse break;
-                    shrink_attempts += 1;
+                    statistics.shrink_attempts += 1;
 
                     // Progress indicator
-                    if (shrink_attempts % 50 == 0) {
+                    if (statistics.shrink_attempts % 50 == 0) {
                         std.debug.print(".", .{});
                     }
 
@@ -112,6 +132,7 @@ pub fn check(
                             freeFn(allocator, next_val);
                         }
                     } else |_| {
+                        statistics.successful_shrinks += 1;
                         // Order matters: the live iterator may hold a reference
                         // to `minimal_value` via its internal state. Tear down the
                         // iterator before freeing the value it referenced.
@@ -127,10 +148,11 @@ pub fn check(
                     }
                 }
                 std.debug.print("\nMinimal failing input: {any}\n", .{minimal_value});
-                std.debug.print("Shrink attempts: {d}\n", .{shrink_attempts});
+                std.debug.print("Shrink attempts: {d}\n", .{statistics.shrink_attempts});
             }
             return err;
         };
+        statistics.passed += 1;
     }
     std.debug.print("OK. {d} tests passed.\n", .{options.num_runs});
 }
@@ -152,10 +174,13 @@ test "runner: zero runs completes immediately" {
     }.prop;
 
     // With num_runs = 0, the property should never be called
+    var statistics = Statistics{ .runs = 10, .passed = 5, .shrink_attempts = 3, .successful_shrinks = 2 };
     try check(allocator, int_gen, alwaysFail, .{
         .num_runs = 0,
         .seed = 12345,
+        .statistics = &statistics,
     });
+    try testing.expectEqualDeep(Statistics{ .seed = 12345 }, statistics);
 }
 
 test "runner: passing property completes successfully" {
@@ -169,10 +194,15 @@ test "runner: passing property completes successfully" {
         }
     }.prop;
 
+    var statistics: Statistics = .{};
     try check(allocator, int_gen, alwaysPass, .{
         .num_runs = 10,
         .seed = 12345,
+        .statistics = &statistics,
     });
+    try testing.expectEqualDeep(Statistics{ .seed = 12345, .runs = 10, .passed = 10 }, statistics);
+    try check(allocator, int_gen, alwaysPass, .{ .num_runs = 2, .seed = 42, .statistics = &statistics });
+    try testing.expectEqualDeep(Statistics{ .seed = 42, .runs = 2, .passed = 2 }, statistics);
 }
 
 test "runner: failing property returns error" {
@@ -213,12 +243,15 @@ test "runner: generator error propagates" {
         fn prop(_: i32) !void {}
     }.prop;
 
+    var statistics = Statistics{ .runs = 10, .passed = 10 };
     const result = check(allocator, failing_gen, anyProp, .{
         .num_runs = 10,
         .seed = 12345,
+        .statistics = &statistics,
     });
 
     try testing.expectError(core.GenError.InvalidChoice, result);
+    try testing.expectEqualDeep(Statistics{ .seed = 12345 }, statistics);
 }
 
 test "runner: seed produces reproducible results" {
@@ -415,5 +448,68 @@ test "regression: runner closes borrowing iterators before freeing their values"
             .num_runs = 1,
             .max_shrink_attempts = budget,
         }));
+    }
+}
+
+test "runner statistics retain passing runs before a failure" {
+    const Property = struct {
+        var calls: u32 = 0;
+
+        fn prop(_: i32) !void {
+            calls += 1;
+            if (calls == 3) return error.PropertyFailed;
+        }
+    };
+    Property.calls = 0;
+    var generator = gen.int(i32);
+    generator.shrinkFn = null;
+    var statistics: Statistics = .{};
+    try testing.expectError(error.PropertyFailed, check(testing.allocator, generator, Property.prop, .{
+        .num_runs = 10,
+        .seed = 42,
+        .statistics = &statistics,
+    }));
+    try testing.expectEqualDeep(Statistics{ .seed = 42, .runs = 3, .passed = 2 }, statistics);
+}
+
+test "runner statistics distinguish shrink attempts from accepted candidates" {
+    const Property = struct {
+        var calls: u32 = 0;
+        var failures: u32 = 0;
+        fn checkValue(value: i32) !void {
+            calls += 1;
+            if (value > 8) {
+                failures += 1;
+                return error.PropertyFailed;
+            }
+        }
+    };
+    const generator = gen.Generator(i32){
+        .generateFn = gen.constant(@as(i32, 100)).generateFn,
+        .shrinkFn = gen.int(i32).shrinkFn,
+        .freeFn = null,
+    };
+    for ([_]u32{ 0, 1, 3, 1000 }) |budget| {
+        Property.calls = 0;
+        Property.failures = 0;
+        var statistics: Statistics = .{};
+        try testing.expectError(error.PropertyFailed, check(testing.allocator, generator, Property.checkValue, .{
+            .seed = 42,
+            .num_runs = 10,
+            .max_shrink_attempts = budget,
+            .statistics = &statistics,
+        }));
+        try testing.expectEqualDeep(Statistics{
+            .seed = 42,
+            .runs = 1,
+            .passed = 0,
+            .shrink_attempts = Property.calls - 1,
+            .successful_shrinks = Property.failures - 1,
+        }, statistics);
+        try testing.expect(statistics.shrink_attempts <= budget);
+        if (budget == 1000) {
+            try testing.expect(statistics.successful_shrinks > 0);
+            try testing.expect(statistics.successful_shrinks < statistics.shrink_attempts);
+        }
     }
 }
