@@ -33,7 +33,3 @@ To run all examples:
 ```sh
 zig build run-all
 ```
-
-The ninth example uses Zig `test` blocks and `std.testing.allocator`.
-It also runs alongside the library tests with `zig build test` or `make test`.
-To run only this example, use `zig build run-e9_zig_test`.
