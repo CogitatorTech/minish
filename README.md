@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?label=license&style=flat&labelColor=282c34&logo=open-source-initiative)](https://github.com/CogitatorTech/minish/blob/main/LICENSE)
 [![Examples](https://img.shields.io/badge/examples-view-green?style=flat&labelColor=282c34&logo=zig)](https://github.com/CogitatorTech/minish/tree/main/examples)
 [![Docs](https://img.shields.io/badge/docs-read-blue?style=flat&labelColor=282c34&logo=read-the-docs)](https://CogitatorTech.github.io/minish/)
-[![Zig](https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat&labelColor=282c34&logo=zig)](https://ziglang.org/download/)
+[![Zig](https://img.shields.io/badge/zig-0.17.0-F7A41D?style=flat&labelColor=282c34&logo=zig)](https://ziglang.org/download/)
 [![Release](https://img.shields.io/github/release/CogitatorTech/minish.svg?label=release&style=flat&labelColor=282c34&logo=github)](https://github.com/CogitatorTech/minish/releases/latest)
 
 A property-based testing framework for Zig
@@ -92,10 +92,11 @@ Zig version supported by the main releases of Minish:
 
 | Zig      | Minish Tags           |
 |----------|-----------------------|
+| `0.17.0` | `v0.5.x` |
 | `0.16.0` | `v0.3.x` and `v0.4.x` |
 | `0.15.2` | `v0.1.x`              |
 
-The `main` branch normally is developed and build using the latest (non-developmental) Zig release.
+The `main` branch normally is developed and built using the latest (non-developmental) Zig release.
 
 #### Adding to Build Script
 

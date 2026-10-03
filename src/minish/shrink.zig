@@ -89,7 +89,7 @@ fn makeIntShrinkNext(comptime T: type) *const fn (*anyopaque) ?T {
             context.current_bound = context.last_tried;
 
             // Widen before subtracting so both signed extremes fit.
-            const Wide = std.meta.Int(.signed, @typeInfo(T).int.bits + 1);
+            const Wide = @Int(.signed, @typeInfo(T).int.bits + 1);
             const current: Wide = context.current_bound;
             const failing: Wide = context.failing_bound;
             const delta = failing - current;
@@ -842,11 +842,11 @@ pub fn tuple2IntShrinker(comptime T1: type, comptime T2: type) *const fn (std.me
 
 /// Shrink one field at a time and independently clone unchanged owned fields.
 pub fn structure(comptime T: type, allocator: std.mem.Allocator, value: T, comptime field_gens: anytype) Iterator(T) {
-    const fields = @typeInfo(T).@"struct".fields;
+    const fields = @typeInfo(T).@"struct".field_names;
     const Iterators = comptime blk: {
         var types: [fields.len]type = undefined;
-        for (fields, 0..) |field, i| types[i] = ?Iterator(field.type);
-        break :blk std.meta.Tuple(&types);
+        for (fields, 0..) |field, i| types[i] = ?Iterator(@FieldType(T, field));
+        break :blk @Tuple(&types);
     };
     const Context = struct {
         allocator: std.mem.Allocator,
@@ -858,14 +858,14 @@ pub fn structure(comptime T: type, allocator: std.mem.Allocator, value: T, compt
             const self: *@This() = @ptrCast(@alignCast(ctx));
             inline for (fields, 0..) |field, i| {
                 if (self.field_idx == i) {
-                    const field_gen = @field(field_gens, field.name);
+                    const field_gen = @field(field_gens, field);
                     if (field_gen.shrinkFn) |shrinker| {
                         if (self.iterators[i] == null) {
-                            self.iterators[i] = shrinker(self.allocator, @field(self.original, field.name));
+                            self.iterators[i] = shrinker(self.allocator, @field(self.original, field));
                         }
                         if (self.iterators[i].?.next()) |shrunk| {
                             var result = self.original;
-                            @field(result, field.name) = shrunk;
+                            @field(result, field) = shrunk;
                             cloneFields(T, self.allocator, &result, field_gens, i) catch {
                                 if (field_gen.freeFn) |free| free(self.allocator, shrunk);
                                 return null;
@@ -896,20 +896,20 @@ pub fn structure(comptime T: type, allocator: std.mem.Allocator, value: T, compt
 }
 
 fn cloneFields(comptime T: type, allocator: std.mem.Allocator, value: *T, comptime field_gens: anytype, skip_idx: ?usize) std.mem.Allocator.Error!void {
-    const fields = @typeInfo(T).@"struct".fields;
+    const fields = @typeInfo(T).@"struct".field_names;
     var copied: usize = 0;
     errdefer {
         inline for (fields, 0..) |field, i| {
             if (i < copied and (skip_idx == null or i != skip_idx.?)) {
-                if (@field(field_gens, field.name).freeFn) |free| free(allocator, @field(value.*, field.name));
+                if (@field(field_gens, field).freeFn) |free| free(allocator, @field(value.*, field));
             }
         }
     }
     inline for (fields, 0..) |field, i| {
         if (skip_idx == null or i != skip_idx.?) {
-            const field_gen = @field(field_gens, field.name);
+            const field_gen = @field(field_gens, field);
             std.debug.assert(field_gen.freeFn == null or field_gen.cloneFn != null);
-            if (field_gen.cloneFn) |clone| @field(value.*, field.name) = try clone(allocator, @field(value.*, field.name));
+            if (field_gen.cloneFn) |clone| @field(value.*, field) = try clone(allocator, @field(value.*, field));
         }
         copied = i + 1;
     }

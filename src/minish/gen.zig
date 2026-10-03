@@ -60,7 +60,7 @@ fn generate_int(comptime T: type) fn (tc: *TestCase) core.GenError!T {
             } else {
                 // For signed integers, generate across unsigned range and bitcast
                 // This correctly covers the full range including minInt
-                const UnsignedT = std.meta.Int(.unsigned, IntType.bits);
+                const UnsignedT = @Int(.unsigned, IntType.bits);
                 const max_unsigned = std.math.maxInt(UnsignedT);
                 const val = try tc.choice(max_unsigned);
                 return @bitCast(@as(UnsignedT, @intCast(val)));
@@ -213,7 +213,7 @@ pub fn enumValue(comptime E: type) Generator(E) {
             if (enum_info != .@"enum") {
                 @compileError("enumValue() requires an enum type");
             }
-            const fields = enum_info.@"enum".fields;
+            const fields = enum_info.@"enum".field_values;
             if (fields.len == 0) {
                 return error.InvalidChoice;
             }
@@ -223,7 +223,7 @@ pub fn enumValue(comptime E: type) Generator(E) {
             const all_values = blk: {
                 var vals: [fields.len]E = undefined;
                 inline for (fields, 0..) |f, i| {
-                    vals[i] = @enumFromInt(f.value);
+                    vals[i] = @fromBackingInt(@intCast(f));
                 }
                 break :blk vals;
             };
@@ -707,15 +707,15 @@ pub fn structure(
         @compileError("structure() requires a struct type");
     }
     const can_clone = comptime blk: {
-        for (type_info.@"struct".fields) |field| {
-            const field_gen = @field(field_gens, field.name);
+        for (type_info.@"struct".field_names) |field| {
+            const field_gen = @field(field_gens, field);
             if (field_gen.freeFn != null and field_gen.cloneFn == null) break :blk false;
         }
         break :blk true;
     };
     const has_shrinker = comptime blk: {
-        for (type_info.@"struct".fields) |field| {
-            if (@field(field_gens, field.name).shrinkFn != null) break :blk true;
+        for (type_info.@"struct".field_names) |field| {
+            if (@field(field_gens, field).shrinkFn != null) break :blk true;
         }
         break :blk false;
     };
@@ -728,19 +728,19 @@ pub fn structure(
             // free them on partial failure.
             var filled_idx: usize = 0;
             errdefer {
-                inline for (struct_info.fields, 0..) |field, i| {
+                inline for (struct_info.field_names, 0..) |field, i| {
                     if (i < filled_idx) {
-                        const field_gen = @field(field_gens, field.name);
+                        const field_gen = @field(field_gens, field);
                         if (field_gen.freeFn) |freeFn| {
-                            freeFn(tc.allocator, @field(result, field.name));
+                            freeFn(tc.allocator, @field(result, field));
                         }
                     }
                 }
             }
 
-            inline for (struct_info.fields) |field| {
-                const field_gen = @field(field_gens, field.name);
-                @field(result, field.name) = try field_gen.generateFn(tc);
+            inline for (struct_info.field_names) |field| {
+                const field_gen = @field(field_gens, field);
+                @field(result, field) = try field_gen.generateFn(tc);
                 filled_idx += 1;
             }
 
@@ -749,10 +749,10 @@ pub fn structure(
 
         fn free(allocator: std.mem.Allocator, value: T) void {
             const struct_info = @typeInfo(T).@"struct";
-            inline for (struct_info.fields) |field| {
-                const field_gen = @field(field_gens, field.name);
+            inline for (struct_info.field_names) |field| {
+                const field_gen = @field(field_gens, field);
                 if (field_gen.freeFn) |freeFn| {
-                    freeFn(allocator, @field(value, field.name));
+                    freeFn(allocator, @field(value, field));
                 }
             }
         }
@@ -1052,7 +1052,7 @@ test "enumValue generator produces valid enum values" {
     var tc = TestCase.init(allocator, 12345);
     defer tc.deinit();
 
-    const Color = enum { Red, Green, Blue };
+    const Color = enum(u8) { Red = 2, Green = 7, Blue = 42 };
     const gen_enum = enumValue(Color);
 
     var got_red = false;
@@ -1067,7 +1067,7 @@ test "enumValue generator produces valid enum values" {
             .Blue => got_blue = true,
         }
     }
-    try testing.expect(got_red or got_green or got_blue);
+    try testing.expect(got_red and got_green and got_blue);
 }
 
 test "uuid generator produces valid v4 format" {
@@ -1161,9 +1161,7 @@ test "tuple3 generator produces valid tuples" {
     _ = value[2]; // u8
 }
 
-test "regression: signed int generator uses std.meta.Int correctly" {
-    // Regression: @Type(.{ .int = ... }) was replaced with std.meta.Int(.unsigned, bits)
-    // in Zig 0.16.0. Verify signed integers still generate across the full range.
+test "regression: signed int generator covers the full range" {
     const allocator = testing.allocator;
 
     // i8 range: -128 to 127
@@ -1654,7 +1652,7 @@ test "arrays tuples and optionals shrink through the runner" {
                 const fails = switch (@typeInfo(V)) {
                     .optional => if (value) |v| v > 8 else false,
                     .array => value[0] + value[1] > 8,
-                    .@"struct" => value[0] + value[std.meta.fields(V).len - 1] > 8,
+                    .@"struct" => value[0] + value[@typeInfo(V).@"struct".field_names.len - 1] > 8,
                     else => unreachable,
                 };
                 if (fails) {
@@ -1682,7 +1680,7 @@ test "owned array and tuple candidates change one element without aliasing" {
     }) |case| {
         const g = case[0];
         const V = @TypeOf(case[1]);
-        const size = if (@typeInfo(V) == .array) @typeInfo(V).array.len else std.meta.fields(V).len;
+        const size = if (@typeInfo(V) == .array) @typeInfo(V).array.len else @typeInfo(V).@"struct".field_names.len;
         const original = try g.cloneFn.?(testing.allocator, case[1]);
         defer g.freeFn.?(testing.allocator, original);
         const copy = try g.cloneFn.?(testing.allocator, original);
@@ -1691,7 +1689,7 @@ test "owned array and tuple candidates change one element without aliasing" {
         g.freeFn.?(testing.allocator, copy);
         var it = g.shrinkFn.?(testing.allocator, original);
         defer it.deinit();
-        var saw_element = [_]bool{false} ** size;
+        var saw_element: [size]bool = @splat(false);
         while (it.next()) |candidate| {
             defer g.freeFn.?(testing.allocator, candidate);
             var changed: usize = 0;
