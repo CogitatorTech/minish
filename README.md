@@ -31,19 +31,16 @@ Compared to typical example-based testing (like unit tests), instead of writing 
 inputs and expected outputs, you define general properties about your code's behavior.
 The testing framework then generates a wide range of random inputs to verify that these properties hold for all cases.
 
-Given a piece of code like a function and its property, a property-based testing workflow normally involves the
-following steps:
+Given a piece of code like a function and its property, a property-based testing workflow normally involves the following steps:
 
 1. Generating a lot of random inputs.
 2. Finding cases where the input causes the property to fail.
 3. Finding smaller subsets of the failing input that still cause the failure (this is called "shrinking").
 
-For example, consider the property of a `reverse` function that states that reversing
-a string twice should return the original string.
-In property-based testing, you would define this property and let the framework generate a lot of random strings to
-test it.
-If it finds a string that makes the property fail (due to a bug in the reverse function, for example), it will then try
-to shrink that string to a simpler or shorter case that still makes the property fail.
+For example, consider the property of a `reverse` function that states that reversing a string twice should return the original string.
+In property-based testing, you would define this property and let the framework generate a lot of random strings to test it.
+If it finds a string that makes the property fail (due to a bug in the reverse function, for example), it will then try to shrink that string to
+a simpler or shorter case that still makes the property fail.
 
 Here is a brief comparison between example-based testing and property-based testing paradigms:
 
@@ -83,7 +80,7 @@ Run the following command in the root directory of your project to download Mini
 zig fetch --save=minish "https://github.com/CogitatorTech/minish/archive/<branch_or_tag>.tar.gz"
 ```
 
-Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.4.0`.
+Replace `<branch_or_tag>` with the desired branch or release tag, like `main` (for the development version) or `v0.5.1`.
 This command will download Minish and add it to Zig's global cache and update your project's `build.zig.zon` file.
 
 ##### Zig Version Support
@@ -172,8 +169,8 @@ You can find the API documentation for the latest release of Minish [here](https
 ### Examples
 
 Check out the [examples](examples) directory for example usages of Minish.
-The [Zig test example](examples/e9_zig_test.zig) demonstrates properties inside
-`test` blocks and runs alongside the library tests with `zig build test`.
+The [Zig test example](examples/e9_zig_test.zig) demonstrates properties inside `test` blocks and runs alongside the
+library tests with `zig build test`.
 
 ---
 
